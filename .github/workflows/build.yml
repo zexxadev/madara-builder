@@ -16,21 +16,37 @@ jobs:
         variant: [Vanilla, RSKSU-SusFS]
 
     steps:
-      - name: Checkout Kernel Source
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex git libssl-dev libelf-dev python3 zip
+          sudo apt-get install -y bc bison build-essential ccache curl flex git libssl-dev libelf-dev python3 zip unzip
+
+      - name: Cache Proton Clang
+        id: cache-clang
+        uses: actions/cache@v4
+        with:
+          path: clang
+          key: proton-clang-v1
 
       - name: Clone Proton Clang
+        if: steps.cache-clang.outputs.cache-hit != 'true'
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
 
+      - name: Clone Kernel Source (niigo_yoka)
+        run: |
+          git clone --depth=1 -b niigo_yoka https://github.com/zexxadev/niigo_kernel_xiaomi_blossom.git kernel
+
+      - name: Cache CCache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-blossom-${{ matrix.variant }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-blossom-${{ matrix.variant }}-
+
       - name: Apply Performance, GPU OC & Deep Sleep Patches
+        working-directory: kernel
         run: |
           python3 - << 'EOF'
           import glob
@@ -164,6 +180,7 @@ jobs:
           EOF
 
       - name: Setup Variant (${{ matrix.variant }})
+        working-directory: kernel
         run: |
           if [ "${{ matrix.variant }}" == "RSKSU-SusFS" ]; then
 
@@ -399,29 +416,42 @@ jobs:
           fi
 
       - name: Build Kernel
+        working-directory: kernel
         run: |
-          export PATH="$PWD/clang/bin:$PATH"
+          export PATH="$GITHUB_WORKSPACE/clang/bin:$PATH"
           export ARCH=arm64
           export SUBARCH=arm64
           export KBUILD_BUILD_USER="ZexxaDev"
           export KBUILD_BUILD_HOST="GitHubActions"
-          export LOCALVERSION="+"
-
-          # Tambahan Defconfig: Network BBR, NOOP I/O, Deep Sleep & Power Efficiency
-          cat << 'EOF' >> arch/arm64/configs/blossom_defconfig
-          CONFIG_TCP_CONG_ADVANCED=y
-          CONFIG_TCP_CONG_BBR=y
-          CONFIG_DEFAULT_BBR=y
-          CONFIG_NET_SCH_FQ=y
-          CONFIG_IOSCHED_NOOP=y
-          CONFIG_DEFAULT_NOOP=y
-          CONFIG_PM_AUTOSLEEP=y
-          CONFIG_PM_WAKELOCKS=y
-          CONFIG_ENERGY_MODEL=y
-          CONFIG_WQ_POWER_EFFICIENT_DEFAULT=y
-          EOF
+          export LOCALVERSION="-madaraKernel"
+          export USE_CCACHE=1
+          export CCACHE_EXEC=/usr/bin/ccache
+          ccache -M 5G
 
           make -j$(nproc --all) O=out ARCH=arm64 blossom_defconfig
+
+          ./scripts/config --file out/.config \
+            -e TCP_CONG_ADVANCED \
+            -e TCP_CONG_BBR \
+            -e DEFAULT_BBR \
+            -d DEFAULT_BIC \
+            -d DEFAULT_CUBIC \
+            -d DEFAULT_RENO \
+            --set-str DEFAULT_TCP_CONG "bbr" \
+            -e NET_SCH_FQ \
+            -e IOSCHED_NOOP \
+            -e DEFAULT_NOOP \
+            -d DEFAULT_CFQ \
+            -d DEFAULT_DEADLINE \
+            --set-str DEFAULT_IOSCHED "noop" \
+            -e PM_AUTOSLEEP \
+            -e PM_WAKELOCKS \
+            -e ENERGY_MODEL \
+            -e WQ_POWER_EFFICIENT_DEFAULT \
+            --set-str LOCALVERSION "-madaraKernel" \
+            -d LOCALVERSION_AUTO
+
+          make -j$(nproc --all) O=out ARCH=arm64 olddefconfig
 
           if [ "${{ matrix.variant }}" == "RSKSU-SusFS" ]; then
             grep -q "^CONFIG_KSU=y" out/.config || {
@@ -443,7 +473,7 @@ jobs:
 
           make -j$(nproc --all) O=out \
             ARCH=arm64 \
-            CC=clang \
+            CC="ccache clang" \
             LD=ld.lld \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
@@ -458,10 +488,12 @@ jobs:
               exit 1
             }
 
+          ccache -s
+
       - name: Pack AnyKernel3
         run: |
           git clone --depth=1 https://github.com/zexxadev/AnyKernel3-blossom.git anykernel
-          cp out/arch/arm64/boot/Image.gz-dtb anykernel/
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb anykernel/
 
           cd anykernel
 
@@ -575,17 +607,29 @@ jobs:
           EOF
           chmod 0644 ramdisk/init.madara.rc
 
+          # Hapus .git & README sebelum zip agar root ZIP langsung berisi META-INF & anykernel.sh
+          rm -rf .git README.md
           ZIP_NAME="madaraKernel-blossom-${{ matrix.variant }}-$(date +%Y%m%d).zip"
-          zip -r9 "../$ZIP_NAME" * -x .git README.md *placeholder
+          zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" .
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
-      - name: Publish
+          # Verifikasi struktur ZIP memiliki META-INF di root
+          unzip -l "$GITHUB_WORKSPACE/$ZIP_NAME" | grep -q "META-INF/com/google/android/update-binary" || {
+            echo "ERROR: Struktur ZIP tidak valid untuk recovery!"
+            exit 1
+          }
+          echo "OK: $ZIP_NAME valid dan langsung flashable di recovery."
+
+      - name: Publish to niigo_kernel_xiaomi_blossom
         uses: softprops/action-gh-release@v2
         with:
+          repository: zexxadev/niigo_kernel_xiaomi_blossom
+          token: ${{ secrets.RELEASE_TOKEN }}
           tag_name: madara-b${{ github.run_number }}
           name: madaraKernel Blossom (Build #${{ github.run_number }})
-          files: "**/madaraKernel-*.zip"
+          files: ${{ env.ZIP_NAME }}
           prerelease: true
+          make_latest: true
 
       - name: Send Flashable ZIP & MD5 to Telegram
         env:
