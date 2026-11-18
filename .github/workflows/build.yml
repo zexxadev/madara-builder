@@ -512,7 +512,9 @@ jobs:
           device.name1=blossom
           device.name2=dandelion
           device.name3=angelica
-          device.name4=cattail
+          device.name4=angelican
+          device.name5=cattail
+          device.name6=angelicain
           supported.versions=
           supported.patchlevels=
           '; }
