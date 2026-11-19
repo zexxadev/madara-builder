@@ -148,10 +148,3 @@ jobs:
 
           echo "$RESP"
           echo "$RESP" | grep -q '"ok":true'
-
-      - name: Upload APK artifact (Backup)
-        uses: actions/upload-artifact@v4
-        with:
-          name: BakaSU-Manager-${{ inputs.build_type }}
-          path: ${{ steps.build_apk.outputs.apk_path }}
-          if-no-files-found: error
