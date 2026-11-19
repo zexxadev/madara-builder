@@ -448,6 +448,13 @@ jobs:
             -e PM_WAKELOCKS \
             -e ENERGY_MODEL \
             -e WQ_POWER_EFFICIENT_DEFAULT \
+            -e LRU_GEN \
+            -e LRU_GEN_ENABLED \
+            -e ZRAM_DEDUP \
+            -e SWAP_VMA_READAHEAD \
+            -e CRYPTO_LZ4 \
+            -e KCOMPRESSD \
+            -e KSHRINKD \
             --set-str LOCALVERSION "-madaraKernel" \
             -d LOCALVERSION_AUTO
 
