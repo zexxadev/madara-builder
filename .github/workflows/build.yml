@@ -181,31 +181,6 @@ jobs:
                   f.write(t_txt)
               print(f"Applied Material Glass palette to {th}")
 
-          # 6. Tambahkan border kaca tipis 1.dp pada ElevatedCard / OutlinedCard di layar UI
-          for uifile in glob.glob("manager/**/ui/**/*.kt", recursive=True):
-              if uifile.endswith("Theme.kt") or uifile.endswith("MaterialGlass.kt"):
-                  continue
-              with open(uifile, "r", encoding="utf-8", errors="ignore") as f:
-                  u_txt = f.read()
-              orig_u = u_txt
-              if "ElevatedCard(" in u_txt or "OutlinedCard(" in u_txt:
-                  u_txt = u_txt.replace("ElevatedCard(", "OutlinedCard(")
-                  if "BorderStroke" not in u_txt and "package " in u_txt:
-                      u_txt = re.sub(
-                          r'(package\s+[^\n]+\n)',
-                          r'\1import androidx.compose.foundation.BorderStroke\nimport androidx.compose.ui.graphics.Color\nimport androidx.compose.ui.unit.dp\n',
-                          u_txt,
-                          count=1
-                      )
-                  u_txt = re.sub(
-                      r'OutlinedCard\(\s*modifier\s*=',
-                      'OutlinedCard(border = BorderStroke(1.dp, Color.White.copy(alpha = 0.16f)), modifier =',
-                      u_txt
-                  )
-              if u_txt != orig_u:
-                  with open(uifile, "w", encoding="utf-8") as f:
-                      f.write(u_txt)
-
           print("Material Glass UI & theme applied OK")
           PY
 
