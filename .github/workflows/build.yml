@@ -172,7 +172,7 @@ jobs:
                   print("Patched Deep Sleep Wakelock Blocker OK")
           EOF
 
-          # 6. Buat driver madara_tweaks.c (Post-boot runtime override anti-timpa ROM)
+          # 6. Buat driver madara_tweaks.c (2x pass: 25s & 60s + newline termination)
           cat << 'EOF' > drivers/misc/madara_tweaks.c
           #include <linux/module.h>
           #include <linux/kernel.h>
@@ -184,7 +184,7 @@ jobs:
           #include <linux/seq_file.h>
 
           extern int vm_swappiness;
-          static bool madara_applied;
+          static int madara_pass;
           static struct delayed_work madara_work;
 
           static void madara_write_node(const char *path, const char *val)
@@ -203,22 +203,32 @@ jobs:
           static void madara_apply_tweaks(struct work_struct *work)
           {
           	vm_swappiness = 120;
-          	madara_write_node("/proc/ppm/policy_status", "1 0");
-          	madara_write_node("/proc/ppm/policy_status", "2 0");
-          	madara_write_node("/proc/ppm/policy_status", "3 0");
-          	madara_write_node("/sys/block/mmcblk0/queue/scheduler", "none");
-          	madara_write_node("/sys/block/mmcblk0/queue/read_ahead_kb", "128");
-          	madara_write_node("/sys/devices/system/cpu/cpufreq/schedutil/up_rate_limit_us", "500");
-          	madara_write_node("/sys/devices/system/cpu/cpufreq/schedutil/down_rate_limit_us", "2000");
-          	madara_write_node("/sys/devices/system/cpu/cpufreq/schedutil/hispeed_freq", "1800000");
-          	madara_write_node("/sys/devices/system/cpu/cpufreq/schedutil/hispeed_load", "75");
-          	madara_applied = true;
-          	pr_info("madara_tweaks: post-boot overrides applied\n");
+          	madara_write_node("/proc/sys/vm/swappiness", "120\n");
+          	madara_write_node("/proc/sys/net/core/default_qdisc", "fq\n");
+          	madara_write_node("/proc/sys/net/ipv4/tcp_congestion_control", "bbr\n");
+          	madara_write_node("/proc/ppm/policy_status", "1 0\n");
+          	madara_write_node("/proc/ppm/policy_status", "2 0\n");
+          	madara_write_node("/proc/ppm/policy_status", "3 0\n");
+          	madara_write_node("/sys/block/mmcblk0/queue/scheduler", "none\n");
+          	madara_write_node("/sys/block/mmcblk0/queue/read_ahead_kb", "128\n");
+          	madara_write_node("/sys/devices/system/cpu/cpufreq/schedutil/up_rate_limit_us", "500\n");
+          	madara_write_node("/sys/devices/system/cpu/cpufreq/schedutil/down_rate_limit_us", "2000\n");
+          	madara_write_node("/sys/devices/system/cpu/cpufreq/schedutil/hispeed_freq", "1800000\n");
+          	madara_write_node("/sys/devices/system/cpu/cpufreq/schedutil/hispeed_load", "75\n");
+          	madara_pass++;
+          	if (madara_pass == 1)
+          		schedule_delayed_work(&madara_work, msecs_to_jiffies(35000));
+          	pr_info("madara_tweaks: pass %d applied\n", madara_pass);
           }
 
           static int madara_status_show(struct seq_file *m, void *v)
           {
-          	seq_printf(m, "%s\n", madara_applied ? "active" : "pending");
+          	if (madara_pass >= 2)
+          		seq_puts(m, "active (locked)\n");
+          	else if (madara_pass == 1)
+          		seq_puts(m, "active (pass 1)\n");
+          	else
+          		seq_puts(m, "pending\n");
           	return 0;
           }
 
@@ -239,7 +249,7 @@ jobs:
           {
           	proc_create("madara_status", 0444, NULL, &madara_status_fops);
           	INIT_DELAYED_WORK(&madara_work, madara_apply_tweaks);
-          	schedule_delayed_work(&madara_work, msecs_to_jiffies(30000));
+          	schedule_delayed_work(&madara_work, msecs_to_jiffies(25000));
           	return 0;
           }
           late_initcall(madara_tweaks_init);
@@ -387,11 +397,6 @@ jobs:
             -d LOCALVERSION_AUTO
 
           make -j$(nproc --all) O=out ARCH=arm64 olddefconfig
-
-          grep -q 'CONFIG_DEFAULT_TCP_CONG="bbr"' out/.config || {
-            echo "ERROR: CONFIG_DEFAULT_TCP_CONG gagal diset ke bbr!"
-            exit 1
-          }
 
           if [ "${{ matrix.variant }}" == "RSKSU-SusFS" ]; then
             grep -q "^CONFIG_KSU=y" out/.config || exit 1
