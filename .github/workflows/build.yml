@@ -166,7 +166,47 @@ jobs:
 
           val GlassShape = RoundedCornerShape(22.dp)
           ''')
-          print("Material Glass assets injected OK")
+          # 5. Terapkan palet Material Glass ke Theme.kt
+          for th in glob.glob("manager/**/ui/theme/Theme.kt", recursive=True):
+              with open(th, "r", encoding="utf-8", errors="ignore") as f:
+                  t_txt = f.read()
+              t_txt = re.sub(
+                  r'(darkColorScheme\s*\()',
+                  r'\1\n    background = androidx.compose.ui.graphics.Color(0xFF080C14),\n    surface = androidx.compose.ui.graphics.Color(0x88131B2E),\n    surfaceContainer = androidx.compose.ui.graphics.Color(0x7A17223B),\n    surfaceContainerLow = androidx.compose.ui.graphics.Color(0x66111827),\n    surfaceContainerHigh = androidx.compose.ui.graphics.Color(0x991E293B),\n    outlineVariant = androidx.compose.ui.graphics.Color(0x40FFFFFF),',
+                  t_txt,
+                  count=1
+              )
+              t_txt = re.sub(r'dynamicColor\s*:\s*Boolean\s*=\s*true', 'dynamicColor: Boolean = false', t_txt)
+              with open(th, "w", encoding="utf-8") as f:
+                  f.write(t_txt)
+              print(f"Applied Material Glass palette to {th}")
+
+          # 6. Tambahkan border kaca tipis 1.dp pada ElevatedCard / OutlinedCard di layar UI
+          for uifile in glob.glob("manager/**/ui/**/*.kt", recursive=True):
+              if uifile.endswith("Theme.kt") or uifile.endswith("MaterialGlass.kt"):
+                  continue
+              with open(uifile, "r", encoding="utf-8", errors="ignore") as f:
+                  u_txt = f.read()
+              orig_u = u_txt
+              if "ElevatedCard(" in u_txt or "OutlinedCard(" in u_txt:
+                  u_txt = u_txt.replace("ElevatedCard(", "OutlinedCard(")
+                  if "BorderStroke" not in u_txt and "package " in u_txt:
+                      u_txt = re.sub(
+                          r'(package\s+[^\n]+\n)',
+                          r'\1import androidx.compose.foundation.BorderStroke\nimport androidx.compose.ui.graphics.Color\nimport androidx.compose.ui.unit.dp\n',
+                          u_txt,
+                          count=1
+                      )
+                  u_txt = re.sub(
+                      r'OutlinedCard\(\s*modifier\s*=',
+                      'OutlinedCard(border = BorderStroke(1.dp, Color.White.copy(alpha = 0.16f)), modifier =',
+                      u_txt
+                  )
+              if u_txt != orig_u:
+                  with open(uifile, "w", encoding="utf-8") as f:
+                      f.write(u_txt)
+
+          print("Material Glass UI & theme applied OK")
           PY
 
       - name: Cache Rust, cargo-ndk & Target
@@ -203,6 +243,30 @@ jobs:
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon
+
+      - name: Sync Internal Manager Signature Hash with ZexSU Keystore
+        working-directory: zexsu_src
+        run: |
+          echo "${{ secrets.ZEXSU_KEYSTORE_B64 }}" | base64 -d > /tmp/zexsu_pre.jks
+          CERT_INFO=$(keytool -list -v -keystore /tmp/zexsu_pre.jks -storepass "${{ secrets.ZEXSU_KS_PASS }}" -alias "${{ secrets.ZEXSU_KS_ALIAS }}" 2>/dev/null)
+          Z_HASH=$(echo "$CERT_INFO" | grep -m1 "SHA256:" | sed 's/.*SHA256:[[:space:]]*//' | tr -d ':' | tr 'A-F' 'a-f')
+          rm -f /tmp/zexsu_pre.jks
+          echo "Target ZexSU Cert SHA-256: $Z_HASH"
+          python3 - "$Z_HASH" << 'PY'
+          import os, re, sys
+          z_hash = sys.argv[1]
+          for root, _, files in os.walk("manager"):
+              for fn in files:
+                  if fn.endswith((".kt", ".java", ".rs", ".c", ".cpp", ".h")):
+                      fp = os.path.join(root, fn)
+                      with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                          c = f.read()
+                      nc = re.sub(r'(["\'])[0-9a-fA-F]{64}\1', rf'\g<1>{z_hash}\g<1>', c)
+                      if nc != c:
+                          with open(fp, "w", encoding="utf-8") as f:
+                              f.write(nc)
+                          print(f"Replaced internal cert hash in {fp}")
+          PY
 
       - name: Zipalign, Sign APK & Extract Certificate Hash
         id: sign_apk
@@ -630,26 +694,37 @@ jobs:
           z_hash = os.environ["ZEXSU_HASH"]
           z_pkg = "org.zexsu.manager"
 
-          # 1. Patch Kbuild / Makefile EXPECTED_SIZE & EXPECTED_HASH
+          if not z_size or not z_hash:
+              import subprocess
+              subprocess.run("echo \"${{ secrets.ZEXSU_KEYSTORE_B64 }}\" | base64 -d > /tmp/ks.jks", shell=True, check=True)
+              out = subprocess.check_output("keytool -list -v -keystore /tmp/ks.jks -storepass \"${{ secrets.ZEXSU_KS_PASS }}\" -alias \"${{ secrets.ZEXSU_KS_ALIAS }}\"", shell=True, text=True)
+              z_hash = re.search(r"SHA256:\s*([0-9A-Fa-f:]+)", out).group(1).replace(":", "").lower()
+              subprocess.run("openssl pkcs12 -in /tmp/ks.jks -clcerts -nokeys -passin pass:\"${{ secrets.ZEXSU_KS_PASS }}\" | openssl x509 -outform DER -out /tmp/c.der", shell=True, check=True)
+              z_size = str(os.path.getsize("/tmp/c.der"))
+
+          print(f"Applying -> PKG={z_pkg} | SIZE={z_size} | HASH={z_hash}")
+
+          # 1. Patch Kbuild & Makefile (tangkap semua variasi nama macro EXPECTED_SIZE / HASH)
           for kb in glob.glob("drivers/kernelsu/**/Kbuild", recursive=True) + glob.glob("drivers/kernelsu/**/Makefile", recursive=True):
               with open(kb, "r") as f:
-                  txt = f.read()
-              new_txt = re.sub(r'(-DEXPECTED_SIZE=)(?:0x[0-9a-fA-F]+|\d+)', rf'\g<1>{z_size}', txt)
-              new_txt = re.sub(r'(-DEXPECTED_HASH=\\?")[^\\"]+ (\\?")', rf'\g<1>{z_hash}\g<2>', new_txt)
-              new_txt = re.sub(r'(-DEXPECTED_HASH=\\?")[0-9a-fA-F]{64}(\\?")', rf'\g<1>{z_hash}\g<2>', new_txt)
-              new_txt = re.sub(r'(-DKSU_MANAGER_PACKAGE=\\?")[^\\"]+ (\\?")', rf'\g<1>{z_pkg}\g<2>', new_txt)
-              if new_txt != txt:
+                  ktxt = f.read()
+              new_ktxt = re.sub(r'(-D[A-Z0-9_]*EXPECTED[A-Z0-9_]*SIZE=)(?:0x[0-9a-fA-F]+|\d+)', rf'\g<1>{z_size}', ktxt)
+              new_ktxt = re.sub(r'(-D[A-Z0-9_]*EXPECTED[A-Z0-9_]*HASH=\\?")[0-9a-fA-F]{64}(\\?")', rf'\g<1>{z_hash}\g<2>', new_ktxt)
+              new_ktxt = re.sub(r'(-D[A-Z0-9_]*MANAGER_PACKAGE=\\?")[^\\"]+ (\\?")', rf'\g<1>{z_pkg}\g<2>', new_ktxt)
+              new_ktxt = re.sub(r'(-D[A-Z0-9_]*MANAGER_PACKAGE=\\?")[^\\"]+(\\?")', rf'\g<1>{z_pkg}\g<2>', new_ktxt)
+              if new_ktxt != ktxt:
                   with open(kb, "w") as f:
-                      f.write(new_txt)
+                      f.write(new_ktxt)
                   print(f"Synced ZexSU signature in {kb}")
 
-          # 2. Patch apk_sign.c & pkg_observer.c sebagai fallback langsung di C
+          # 2. Patch apk_sign.c, pkg_observer.c, dan seluruh header/source C di drivers/kernelsu
           for cfile in glob.glob("drivers/kernelsu/**/*.[ch]", recursive=True):
               with open(cfile, "r", errors="ignore") as f:
                   ctxt = f.read()
               orig = ctxt
-              ctxt = re.sub(r'(#define\s+EXPECTED_SIZE\s+)(?:0x[0-9a-fA-F]+|\d+)', rf'\g<1>{z_size}', ctxt)
-              ctxt = re.sub(r'(#define\s+EXPECTED_HASH\s+")([0-9a-fA-F]{64})(")', rf'\g<1>{z_hash}\g<3>', ctxt)
+              ctxt = re.sub(r'(#define\s+[A-Z0-9_]*EXPECTED[A-Z0-9_]*SIZE\s+)(?:0x[0-9a-fA-F]+|\d+)', rf'\g<1>{z_size}', ctxt)
+              ctxt = re.sub(r'(#define\s+[A-Z0-9_]*EXPECTED[A-Z0-9_]*HASH\s+")([0-9a-fA-F]{64})(")', rf'\g<1>{z_hash}\g<3>', ctxt)
+              ctxt = re.sub(r'(["\'])[0-9a-fA-F]{64}\1', rf'\g<1>{z_hash}\g<1>', ctxt)
               for old_mgr in ("me.weishu.kernelsu", "com.rifsxd.ksunext", "com.resukisu.resukisu", "com.resukisu.manager", "org.bakasu.manager"):
                   ctxt = ctxt.replace(old_mgr, z_pkg)
               if ctxt != orig:
