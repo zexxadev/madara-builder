@@ -16,6 +16,22 @@ jobs:
         variant: [Vanilla, RSKSU-SusFS]
 
     steps:
+      - name: Checkout Builder Repo (for Changelog)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 10
+          path: builder
+
+      - name: Generate Auto-Changelog
+        run: |
+          cd builder
+          LOGS=$(git log -n 5 --pretty=format:"• %s" | sed 's/"/\\"/g')
+          {
+            echo "CHANGELOG<<EOF"
+            echo "$LOGS"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
       - name: Install Dependencies
         run: |
           sudo apt-get update
@@ -91,7 +107,6 @@ jobs:
 
           # 2. GPU Overclock PowerVR GE8320 -> 730 MHz
           gpu_patched = False
-
           for pattern in ['drivers/misc/mediatek/**/*.[ch]', 'drivers/gpu/**/*.[ch]']:
               for path in glob.glob(pattern, recursive=True):
                   if 'cpufreq' in path or 'eem' in path:
@@ -127,9 +142,6 @@ jobs:
                       print(f"Patched GPU DTS OPP 730MHz in {dts} ({n_dts} entries) OK")
                       gpu_patched = True
 
-          if not gpu_patched:
-              print("PERINGATAN: Tabel GPU belum ter-patch.")
-
           # 3. CPU Overclock Little Cluster (1.5 GHz -> 1.8 GHz)
           for cpu_f in glob.glob(
               'drivers/misc/mediatek/base/power/cpufreq_v1/**/*.[ch]',
@@ -137,15 +149,13 @@ jobs:
           ):
               with open(cpu_f, 'r') as f:
                   c_txt = f.read()
-
               new_c = re.sub(r'\b1500000\b', '1800000', c_txt)
-
               if new_c != c_txt:
                   with open(cpu_f, 'w') as f:
                       f.write(new_c)
                   print(f"Patched Little CPU OC (1.8GHz) in {cpu_f} OK")
 
-          # 4. Deep Sleep Wakelock Blocker (Blokir wakelock noisy MTK/WiFi saat idle)
+          # 4. Deep Sleep Wakelock Blocker
           wakeup_file = 'drivers/base/power/wakeup.c'
           with open(wakeup_file, 'r') as f:
               w_code = f.read()
@@ -176,226 +186,96 @@ jobs:
               if nw:
                   with open(wakeup_file, 'w') as f:
                       f.write(w_new)
-                  print("Patched Deep Sleep Wakelock Blocker in drivers/base/power/wakeup.c OK")
+                  print("Patched Deep Sleep Wakelock Blocker OK")
           EOF
 
       - name: Setup Variant (${{ matrix.variant }})
         working-directory: kernel
         run: |
           if [ "${{ matrix.variant }}" == "RSKSU-SusFS" ]; then
-
-            # 1. Setup ReSukiSU
             KSU_REF="d5e9e025b8b49155f8014684d64c91742b465f65"
             curl -LSs \
               "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" \
               | bash -s "$KSU_REF"
 
-            # 2. Clone SUSFS v2.3.0 for Linux 4.19 non-GKI
             git clone --depth=1 \
               https://github.com/fabiannabil1/susfs-4.19-nongki.git \
               susfs419
 
             SUSFS_PATCH="$PWD/susfs419/patches/lge-sm8250-29902cf733dc/0002-susfs-v2.3.0-4.19.patch"
+            [ -f "$SUSFS_PATCH" ] || { echo "ERROR: Patch SUSFS tidak ditemukan!"; exit 1; }
 
-            if [ ! -f "$SUSFS_PATCH" ]; then
-              echo "ERROR: File patch SUSFS tidak ditemukan!"
-              find susfs419/patches -name "0002-susfs-v2.3.0-4.19.patch"
-              exit 1
-            fi
-
-            ls -lh "$SUSFS_PATCH"
-
-            # 3. Filter patch SUSFS
-            echo "Filtering SUSFS patch..."
             python3 - "$SUSFS_PATCH" << 'PY'
-          import re
-          import sys
-          import subprocess
-
-          patch_file = sys.argv[1]
-
-          with open(patch_file, "r", encoding="utf-8", errors="replace") as f:
+          import re, sys, subprocess
+          with open(sys.argv[1], "r", encoding="utf-8", errors="replace") as f:
               patch_text = f.read()
-
           chunks = re.split(r"(?=^diff --git )", patch_text, flags=re.MULTILINE)
-
           filtered_chunks = []
-          excluded_cmdline = False
-          excluded_mount = False
-
           for chunk in chunks:
-              if not chunk.strip():
-                  continue
-
+              if not chunk.strip(): continue
               lines = chunk.splitlines(keepends=True)
               first_line = lines[0].strip()
-
               if re.match(r"^diff --git a/fs/proc/cmdline\.c b/fs/proc/cmdline\.c$", first_line):
-                  excluded_cmdline = True
-                  print("Excluded: fs/proc/cmdline.c")
                   continue
-
               if re.match(r"^diff --git a/fs/namespace\.c b/fs/namespace\.c$", first_line):
                   output = []
                   skip_hunk = False
-
                   for line in lines:
                       if line.startswith("@@ "):
                           skip_hunk = ("vfs_create_mount" in line)
-                          if skip_hunk:
-                              excluded_mount = True
-                              print("Excluded incompatible hunk: fs/namespace.c / vfs_create_mount")
-
                       if not skip_hunk:
                           output.append(line)
-
                   filtered_chunks.append("".join(output))
               else:
                   filtered_chunks.append(chunk)
-
-          if not excluded_cmdline:
-              sys.exit("ERROR: Hunk fs/proc/cmdline.c tidak ditemukan.")
-
-          if not excluded_mount:
-              sys.exit("ERROR: Hunk vfs_create_mount tidak ditemukan. Periksa versi patch SUSFS.")
-
-          filtered_patch = "\n".join(filtered_chunks)
-
-          if not filtered_patch.strip():
-              sys.exit("ERROR: Patch SUSFS kosong setelah filtering.")
-
-          result = subprocess.run(
-              ["patch", "-p1", "--no-backup-if-mismatch", "-F3"],
-              input=filtered_patch,
-              text=True
-          )
-
-          if result.returncode != 0:
-              sys.exit("ERROR: Penerapan patch SUSFS gagal. Periksa file .rej.")
-
-          print("SUSFS patch applied successfully.")
+          res = subprocess.run(["patch", "-p1", "--no-backup-if-mismatch", "-F3"], input="\n".join(filtered_chunks), text=True)
+          if res.returncode != 0:
+              sys.exit("ERROR: Patch SUSFS gagal.")
           PY
 
-            # 4. Tampilkan file reject jika ada
             if find . -name "*.rej" -not -path "./susfs419/*" | grep -q .; then
-              echo "=== PERINGATAN: DITEMUKAN FILE .REJ ==="
               find . -name "*.rej" -not -path "./susfs419/*" -exec head -n 80 {} +
-              echo "ERROR: Ada patch yang ditolak."
               exit 1
             fi
 
-            # 5. Validasi file SUSFS
-            for f in fs/susfs.c include/linux/susfs.h include/linux/susfs_def.h; do
-              if [ ! -f "$f" ]; then
-                echo "ERROR: $f tidak ditemukan setelah patch SUSFS"
-                exit 1
-              fi
-              echo "OK: $f ditemukan"
-            done
-
-            # 6. Check required SUSFS constants
-            for c in \
-              CMD_SUSFS_ADD_SUS_PATH_LOOP \
-              CMD_SUSFS_HIDE_SUS_MNTS_FOR_NON_SU_PROCS \
-              CMD_SUSFS_ADD_SUS_MAP \
-              CMD_SUSFS_ENABLE_AVC_LOG_SPOOFING; do
-              grep -q "$c" include/linux/susfs_def.h || {
-                echo "ERROR: $c tidak ditemukan di susfs_def.h"
-                exit 1
-              }
-            done
-            echo "susfs_def.h: semua CMD_SUSFS_* ditemukan"
-
-            # 7. Ensure susfs.o is compiled
             if ! grep -q "susfs.o" fs/Makefile; then
               echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' >> fs/Makefile
-              echo "Menambahkan susfs.o ke fs/Makefile"
             fi
 
-            # 8. Check inline hooks
-            echo "=== CEK HOOK SUSFS INLINE ==="
-            for pair in \
-              "kernel/sys.c:ksu_handle_setresuid" \
-              "fs/exec.c:ksu_handle_execveat" \
-              "fs/open.c:ksu_handle_faccessat" \
-              "fs/read_write.c:ksu_handle_sys_read" \
-              "fs/stat.c:ksu_handle_stat" \
-              "fs/stat.c:ksu_handle_vfs_fstat" \
-              "kernel/reboot.c:ksu_handle_sys_reboot" \
-              "drivers/input/input.c:ksu_handle_input_handle_event"; do
-              f="${pair%%:*}"
-              h="${pair##*:}"
-              if grep -q "$h" "$f"; then
-                echo "OK    $h ($f)"
-              else
-                echo "MISS  $h ($f)"
-              fi
-            done
-
-            # 9. Compatibility patch for Linux 4.19
             python3 - << 'EOF'
-          import os
-          import re
-
+          import os, re
           pkg_obs = 'drivers/kernelsu/manager/pkg_observer.c'
           if os.path.exists(pkg_obs):
-              with open(pkg_obs, 'r') as f:
-                  code = f.read()
-
+              with open(pkg_obs, 'r') as f: code = f.read()
               code = code.replace('TWA_RESUME', 'true')
-
               if '.handle_inode_event' in code:
                   wrapper = (
                       'static int ksu_handle_event_419(struct fsnotify_group *group, struct inode *inode, '
                       'u32 mask, const void *data, int data_type, const unsigned char *file_name, '
-                      'u32 cookie, struct fsnotify_iter_info *iter_info)\n'
-                      '{\n'
+                      'u32 cookie, struct fsnotify_iter_info *iter_info)\n{\n'
                       '\tstruct qstr qname = { .name = file_name, .len = file_name ? strlen(file_name) : 0 };\n'
-                      '\treturn ksu_handle_inode_event(NULL, mask, inode, inode, file_name ? &qname : NULL, cookie);\n'
-                      '}\n\n'
+                      '\treturn ksu_handle_inode_event(NULL, mask, inode, inode, file_name ? &qname : NULL, cookie);\n}\n\n'
                       'static const struct fsnotify_ops'
                   )
                   code = code.replace('static const struct fsnotify_ops', wrapper, 1)
-                  code = re.sub(
-                      r'\.handle_inode_event\s*=\s*ksu_handle_inode_event',
-                      '.handle_event = ksu_handle_event_419',
-                      code
-                  )
+                  code = re.sub(r'\.handle_inode_event\s*=\s*ksu_handle_inode_event', '.handle_event = ksu_handle_event_419', code)
+              with open(pkg_obs, 'w') as f: f.write(code)
 
-              with open(pkg_obs, 'w') as f:
-                  f.write(code)
-              print("Patched pkg_observer.c for Linux 4.19 OK")
-          EOF
-
-            # 9b. Fix implicit declaration of filename_lookup di fs/open.c & fs/stat.c (SUSFS)
-            python3 - << 'EOF'
-          import re
-
-          with open('fs/namei.c', 'r') as f:
-              namei = f.read()
+          with open('fs/namei.c', 'r') as f: namei = f.read()
           namei_new, n = re.subn(r'\bstatic\s+(int\s+filename_lookup\s*\()', r'\1', namei)
           if n:
-              with open('fs/namei.c', 'w') as f:
-                  f.write(namei_new)
-              print("Removed static from filename_lookup in fs/namei.c OK")
+              with open('fs/namei.c', 'w') as f: f.write(namei_new)
 
-          decl = (
-              '\nextern int filename_lookup(int dfd, struct filename *name, '
-              'unsigned flags, struct path *path, struct path *root);\n'
-          )
+          decl = '\nextern int filename_lookup(int dfd, struct filename *name, unsigned flags, struct path *path, struct path *root);\n'
           for target in ['fs/open.c', 'fs/stat.c']:
-              with open(target, 'r') as f:
-                  code = f.read()
+              with open(target, 'r') as f: code = f.read()
               if 'extern int filename_lookup(' not in code:
                   includes = list(re.finditer(r'^#include\s+[<"].*?[>"]', code, flags=re.MULTILINE))
                   last_inc_end = includes[-1].end()
                   code = code[:last_inc_end] + decl + code[last_inc_end:]
-                  with open(target, 'w') as f:
-                      f.write(code)
-                  print(f"Added filename_lookup declaration after includes in {target} OK")
+                  with open(target, 'w') as f: f.write(code)
           EOF
 
-            # 10. Enable KSU + SUSFS configuration
             cat << 'EOF' >> arch/arm64/configs/blossom_defconfig
           CONFIG_OVERLAY_FS=y
           CONFIG_KSU=y
@@ -412,7 +292,6 @@ jobs:
           CONFIG_KSU_SUSFS_SUS_MAP=y
           # CONFIG_KPROBES is not set
           EOF
-
           fi
 
       - name: Build Kernel
@@ -423,7 +302,6 @@ jobs:
           export SUBARCH=arm64
           export KBUILD_BUILD_USER="ZexxaDev"
           export KBUILD_BUILD_HOST="GitHubActions"
-          export LOCALVERSION="-madaraKernel"
           export USE_CCACHE=1
           export CCACHE_EXEC=/usr/bin/ccache
           ccache -M 5G
@@ -439,11 +317,7 @@ jobs:
             -d DEFAULT_RENO \
             --set-str DEFAULT_TCP_CONG "bbr" \
             -e NET_SCH_FQ \
-            -e IOSCHED_NOOP \
-            -e DEFAULT_NOOP \
-            -d DEFAULT_CFQ \
-            -d DEFAULT_DEADLINE \
-            --set-str DEFAULT_IOSCHED "noop" \
+            -e DEFAULT_FQ \
             -e PM_AUTOSLEEP \
             -e PM_WAKELOCKS \
             -e ENERGY_MODEL \
@@ -453,33 +327,20 @@ jobs:
             -e ZRAM_DEDUP \
             -e SWAP_VMA_READAHEAD \
             -e CRYPTO_LZ4 \
-            -e KCOMPRESSD \
-            -e KSHRINKD \
             --set-str LOCALVERSION "-madaraKernel" \
             -d LOCALVERSION_AUTO
 
           make -j$(nproc --all) O=out ARCH=arm64 olddefconfig
 
           if [ "${{ matrix.variant }}" == "RSKSU-SusFS" ]; then
-            grep -q "^CONFIG_KSU=y" out/.config || {
-              echo "ERROR: CONFIG_KSU=y gagal aktif di .config!"
-              exit 1
-            }
-            grep -q "^CONFIG_KSU_SUSFS=y" out/.config || {
-              echo "ERROR: CONFIG_KSU_SUSFS=y gagal aktif di .config!"
-              exit 1
-            }
-            if grep -q "^CONFIG_KSU_SUSFS_SUS_MOUNT=y" out/.config; then
-              echo "ERROR: SUS_MOUNT masih aktif!"
-              exit 1
-            fi
-            echo "OK: SUS_MOUNT dinonaktifkan."
+            grep -q "^CONFIG_KSU=y" out/.config || exit 1
+            grep -q "^CONFIG_KSU_SUSFS=y" out/.config || exit 1
           fi
 
           set -o pipefail
-
           make -j$(nproc --all) O=out \
             ARCH=arm64 \
+            LOCALVERSION="" \
             CC="ccache clang" \
             LD=ld.lld \
             CROSS_COMPILE=aarch64-linux-gnu- \
@@ -490,7 +351,6 @@ jobs:
             OBJDUMP=llvm-objdump \
             STRIP=llvm-strip \
             Image.gz-dtb 2>&1 | tee build.log || {
-              echo "=== RINGKASAN ERROR ==="
               grep -iE "error:|undefined symbol|undefined reference" build.log | tail -n 25
               exit 1
             }
@@ -536,10 +396,10 @@ jobs:
 
           dump_boot;
 
-          # Suntikkan langsung ke overlay.d ramdisk boot.img (100% jalan di ROM EROFS / Read-Only)
+          # Inject overlay.d langsung ke /tmp/anykernel/ramdisk
           mkdir -p /tmp/anykernel/ramdisk/overlay.d;
-          cp -f /tmp/anykernel/ramdisk/init.madara.rc /tmp/anykernel/ramdisk/overlay.d/init.madara.rc;
-          cp -f /tmp/anykernel/ramdisk/madara_gps.conf /tmp/anykernel/ramdisk/overlay.d/madara_gps.conf;
+          cp -f /tmp/anykernel/init.madara.rc /tmp/anykernel/ramdisk/overlay.d/init.madara.rc;
+          cp -f /tmp/anykernel/madara_gps.conf /tmp/anykernel/ramdisk/overlay.d/madara_gps.conf;
           chmod 0750 /tmp/anykernel/ramdisk/overlay.d;
           chmod 0644 /tmp/anykernel/ramdisk/overlay.d/init.madara.rc /tmp/anykernel/ramdisk/overlay.d/madara_gps.conf;
           chown 0:0 /tmp/anykernel/ramdisk/overlay.d /tmp/anykernel/ramdisk/overlay.d/init.madara.rc /tmp/anykernel/ramdisk/overlay.d/madara_gps.conf;
@@ -548,9 +408,7 @@ jobs:
           ## end install
           EOF
 
-          mkdir -p ramdisk
-
-          cat << 'EOF' > ramdisk/madara_gps.conf
+          cat << 'EOF' > madara_gps.conf
           NTP_SERVER=id.pool.ntp.org
           NTP_SERVER=0.id.pool.ntp.org
           NTP_SERVER=1.id.pool.ntp.org
@@ -568,66 +426,53 @@ jobs:
           INTERMEDIATE_POS=1
           ACCURACY_THRES=5000
           EOF
-          chmod 0644 ramdisk/madara_gps.conf
+          chmod 0644 madara_gps.conf
 
-          cat << 'EOF' > ramdisk/init.madara.rc
+          cat << 'EOF' > init.madara.rc
           on property:sys.boot_completed=1
-              # VM & Memory (RAM 2GB + ZRAM LZ4)
-              write /proc/sys/vm/swappiness 120
-              write /proc/sys/vm/vfs_cache_pressure 100
-              write /proc/sys/vm/page-cluster 0
-              write /proc/sys/vm/dirty_ratio 15
-              write /proc/sys/vm/dirty_background_ratio 5
-              write /proc/sys/vm/extra_free_kbytes 24300
+              start madara_tweak
 
-              # Network Gaming (TCP BBR + FQ + Fast Open)
-              write /proc/sys/net/core/default_qdisc fq
-              write /proc/sys/net/ipv4/tcp_congestion_control bbr
-              write /proc/sys/net/ipv4/tcp_fastopen 3
-
-              # Fast eMMC I/O & Disable SPI CRC
-              write /sys/block/mmcblk0/queue/scheduler noop
-              write /sys/block/mmcblk0/queue/read_ahead_kb 128
-              write /sys/module/mmc_core/parameters/use_spi_crc 0
-
-              # Bypass MTK PPM Thermal & Power Budget Throttle
-              write /proc/ppm/policy_status "1 0"
-              write /proc/ppm/policy_status "2 0"
-              write /proc/ppm/policy_status "3 0"
-
-              # Deep Sleep & Battery Idle Efficiency
-              write /sys/power/mem_sleep "deep"
-              write /sys/module/workqueue/parameters/power_efficient Y
-              write /proc/sys/kernel/timer_migration 0
-
-              # Instant Wakeup & Schedutil Fast Ramp-Up
-              write /sys/power/sync_on_suspend 0
-              write /sys/devices/system/cpu/cpufreq/schedutil/up_rate_limit_us 500
-              write /sys/devices/system/cpu/cpufreq/schedutil/down_rate_limit_us 2000
-
-              # Touch Responsive & CPU Touch Boost
-              write /sys/devices/system/cpu/cpufreq/schedutil/hispeed_freq 1800000
-              write /sys/devices/system/cpu/cpufreq/schedutil/hispeed_load 75
-              write /proc/perfmgr/tchbst/user/usrtch 1
-              write /proc/perfmgr/boost_ctrl/eas_ctrl/perfserv_ta_uclamp_min 15
-
-              # Systemless GPS Fast-Lock Mount dari overlay.d
-              exec - root root -- /system/bin/mount --bind /overlay.d/madara_gps.conf /vendor/etc/gps.conf
+          service madara_tweak /system/bin/sh -c "sleep 5; \
+              echo 120 > /proc/sys/vm/swappiness; \
+              echo 100 > /proc/sys/vm/vfs_cache_pressure; \
+              echo 0 > /proc/sys/vm/page-cluster; \
+              echo 15 > /proc/sys/vm/dirty_ratio; \
+              echo 5 > /proc/sys/vm/dirty_background_ratio; \
+              echo 24300 > /proc/sys/vm/extra_free_kbytes; \
+              echo fq > /proc/sys/net/core/default_qdisc; \
+              echo bbr > /proc/sys/net/ipv4/tcp_congestion_control; \
+              echo 3 > /proc/sys/net/ipv4/tcp_fastopen; \
+              echo none > /sys/block/mmcblk0/queue/scheduler; \
+              echo 128 > /sys/block/mmcblk0/queue/read_ahead_kb; \
+              echo 0 > /sys/module/mmc_core/parameters/use_spi_crc; \
+              echo '1 0' > /proc/ppm/policy_status; \
+              echo '2 0' > /proc/ppm/policy_status; \
+              echo '3 0' > /proc/ppm/policy_status; \
+              echo deep > /sys/power/mem_sleep; \
+              echo Y > /sys/module/workqueue/parameters/power_efficient; \
+              echo 0 > /proc/sys/kernel/timer_migration; \
+              echo 0 > /sys/power/sync_on_suspend; \
+              echo 500 > /sys/devices/system/cpu/cpufreq/schedutil/up_rate_limit_us; \
+              echo 2000 > /sys/devices/system/cpu/cpufreq/schedutil/down_rate_limit_us; \
+              echo 1800000 > /sys/devices/system/cpu/cpufreq/schedutil/hispeed_freq; \
+              echo 75 > /sys/devices/system/cpu/cpufreq/schedutil/hispeed_load; \
+              echo 1 > /proc/perfmgr/tchbst/user/usrtch; \
+              echo 15 > /proc/perfmgr/boost_ctrl/eas_ctrl/perfserv_ta_uclamp_min; \
+              mount --bind /overlay.d/madara_gps.conf /vendor/etc/gps.conf"
+              class late_start
+              user root
+              group root
+              oneshot
           EOF
-          chmod 0644 ramdisk/init.madara.rc
+          chmod 0644 init.madara.rc
 
-          # Hapus .git & README sebelum zip agar root ZIP langsung berisi META-INF & anykernel.sh
           rm -rf .git README.md
           ZIP_NAME="madaraKernel-blossom-${{ matrix.variant }}-$(date +%Y%m%d).zip"
           zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" .
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
-          # Verifikasi struktur ZIP memiliki META-INF di root
-          unzip -l "$GITHUB_WORKSPACE/$ZIP_NAME" | grep -q "META-INF/com/google/android/update-binary" || {
-            echo "ERROR: Struktur ZIP tidak valid untuk recovery!"
-            exit 1
-          }
-          echo "OK: $ZIP_NAME valid dan langsung flashable di recovery."
+          unzip -l "$GITHUB_WORKSPACE/$ZIP_NAME" | grep -q "META-INF/com/google/android/update-binary" || exit 1
+          echo "OK: $ZIP_NAME valid dan siap flash."
 
       - name: Publish to niigo_kernel_xiaomi_blossom
         uses: softprops/action-gh-release@v2
@@ -636,6 +481,9 @@ jobs:
           token: ${{ secrets.RELEASE_TOKEN }}
           tag_name: madara-b${{ github.run_number }}
           name: madaraKernel Blossom (Build #${{ github.run_number }})
+          body: |
+            ### Changelogs
+            ${{ env.CHANGELOG }}
           files: ${{ env.ZIP_NAME }}
           prerelease: true
           make_latest: true
@@ -646,39 +494,32 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           ZIP_NAME: ${{ env.ZIP_NAME }}
           VARIANT: ${{ matrix.variant }}
+          CHANGELOG: ${{ env.CHANGELOG }}
         run: |
           python3 - << 'EOF'
-          import glob
-          import hashlib
-          import os
-          import sys
-          import urllib.request
-          import uuid
+          import glob, hashlib, html, os, sys, urllib.request, uuid
 
           workspace = os.environ.get("GITHUB_WORKSPACE", ".")
           zip_name = os.environ["ZIP_NAME"]
           matches = glob.glob(os.path.join(workspace, "**", zip_name), recursive=True)
-
           if not matches:
-              sys.exit(f"ERROR: File {zip_name} tidak ditemukan di {workspace}")
+              sys.exit(f"ERROR: File {zip_name} tidak ditemukan")
 
           file_path = matches[0]
           with open(file_path, "rb") as f:
               file_data = f.read()
 
           md5_hash = hashlib.md5(file_data).hexdigest()
-          caption = f"<b>madaraKernel ({os.environ['VARIANT']})</b>\nMD5: <code>{md5_hash}</code>"
+          clog = html.escape(os.environ.get("CHANGELOG", "• Maintenance build"))
+          caption = (
+              f"<b>madaraKernel ({os.environ['VARIANT']})</b>\n"
+              f"MD5: <code>{md5_hash}</code>\n\n"
+              f"<b>Changelog:</b>\n{clog}"
+          )
 
           boundary = f"----WebKitFormBoundary{uuid.uuid4().hex}"
           body = bytearray()
-
-          fields = {
-              "chat_id": os.environ["TG_CHAT_ID"],
-              "caption": caption,
-              "parse_mode": "HTML",
-          }
-
-          for key, val in fields.items():
+          for key, val in {"chat_id": os.environ["TG_CHAT_ID"], "caption": caption, "parse_mode": "HTML"}.items():
               body.extend(f"--{boundary}\r\n".encode())
               body.extend(f'Content-Disposition: form-data; name="{key}"\r\n\r\n{val}\r\n'.encode())
 
@@ -693,12 +534,6 @@ jobs:
           url = f"https://api.telegram.org/bot{os.environ['TG_BOT_TOKEN']}/sendDocument"
           req = urllib.request.Request(url, data=bytes(body))
           req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
-
-          try:
-              with urllib.request.urlopen(req, timeout=120) as resp:
-                  print("Telegram upload sukses:", resp.status)
-          except Exception as e:
-              if hasattr(e, "read"):
-                  print("Telegram API Error:", e.read().decode())
-              sys.exit(f"Gagal kirim ke Telegram: {e}")
+          with urllib.request.urlopen(req, timeout=120) as resp:
+              print("Telegram upload sukses:", resp.status)
           EOF
