@@ -158,7 +158,9 @@ jobs:
 
           cd "$USERSPACE_DIR"
           RUSTUP_TOOLCHAIN=nightly cargo ndk -t arm64-v8a --platform 26 build --release
-          cp target/aarch64-linux-android/release/libksud.so "$GITHUB_WORKSPACE/zexsu_src/$JNI_DIR/arm64-v8a/libksud.so"
+          KSUD_BIN=$(find target -path "*/aarch64-linux-android/release/*" -maxdepth 3 \( -name "libksud.so" -o -name "ksud" \) | head -n 1)
+          [ -f "$KSUD_BIN" ] || { echo "ERROR: Binary ksud tidak ditemukan!"; ls -la target/aarch64-linux-android/release/; exit 1; }
+          cp "$KSUD_BIN" "$GITHUB_WORKSPACE/zexsu_src/$JNI_DIR/arm64-v8a/libksud.so"
 
       - name: Build Unsigned Release APK
         working-directory: zexsu_src/manager
