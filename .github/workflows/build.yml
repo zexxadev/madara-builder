@@ -170,9 +170,27 @@ jobs:
                   with open(wakeup_file, 'w') as f:
                       f.write(w_new)
                   print("Patched Deep Sleep Wakelock Blocker OK")
+
+          # 6. Export fungsi PPM MediaTek agar bisa dipanggil langsung dari madara_tweaks.c
+          for ppm_f in glob.glob('drivers/misc/mediatek/base/power/ppm*/**/*.c', recursive=True):
+              with open(ppm_f, 'r', errors='ignore') as f:
+                  ptxt = f.read()
+              if 'policy_status_proc_write' in ptxt:
+                  # Deteksi nama fungsi internal disable policy di source MTK
+                  m_fn = re.search(r'\b(mt_ppm_set_policy_status|ppm_main_set_policy_status)\s*\(', ptxt)
+                  if m_fn:
+                      fn_name = m_fn.group(1)
+                      if f'EXPORT_SYMBOL({fn_name})' not in ptxt:
+                          ptxt += f'\nEXPORT_SYMBOL({fn_name});\n'
+                          with open(ppm_f, 'w') as f:
+                              f.write(ptxt)
+                      with open('drivers/misc/madara_ppm_api.h', 'w') as hf:
+                          hf.write(f'#define MADARA_PPM_FN {fn_name}\n')
+                      print(f"Found & exported {fn_name} in {ppm_f} OK")
+                      break
           EOF
 
-          # 6. Buat driver madara_tweaks.c (2x pass: 25s & 60s + newline termination)
+          # 7. Buat driver madara_tweaks.c (Direct Kernel API + Memory Variable Override)
           cat << 'EOF' > drivers/misc/madara_tweaks.c
           #include <linux/module.h>
           #include <linux/kernel.h>
@@ -182,12 +200,19 @@ jobs:
           #include <linux/fs.h>
           #include <linux/proc_fs.h>
           #include <linux/seq_file.h>
+          #include <net/net_namespace.h>
+          #include <net/tcp.h>
+
+          #if __has_include("madara_ppm_api.h")
+          #include "madara_ppm_api.h"
+          extern void MADARA_PPM_FN(unsigned int id, bool enable);
+          #endif
 
           extern int vm_swappiness;
           static int madara_pass;
           static struct delayed_work madara_work;
 
-          static void madara_write_node(const char *path, const char *val)
+          static void madara_write_sysfs(const char *path, const char *val)
           {
           	struct file *fp;
           	loff_t pos = 0;
@@ -202,19 +227,30 @@ jobs:
 
           static void madara_apply_tweaks(struct work_struct *work)
           {
+          	/* 1. Kunci vm_swappiness langsung di variabel kernel */
           	vm_swappiness = 120;
-          	madara_write_node("/proc/sys/vm/swappiness", "120\n");
-          	madara_write_node("/proc/sys/net/core/default_qdisc", "fq\n");
-          	madara_write_node("/proc/sys/net/ipv4/tcp_congestion_control", "bbr\n");
-          	madara_write_node("/proc/ppm/policy_status", "1 0\n");
-          	madara_write_node("/proc/ppm/policy_status", "2 0\n");
-          	madara_write_node("/proc/ppm/policy_status", "3 0\n");
-          	madara_write_node("/sys/block/mmcblk0/queue/scheduler", "none\n");
-          	madara_write_node("/sys/block/mmcblk0/queue/read_ahead_kb", "128\n");
-          	madara_write_node("/sys/devices/system/cpu/cpufreq/schedutil/up_rate_limit_us", "500\n");
-          	madara_write_node("/sys/devices/system/cpu/cpufreq/schedutil/down_rate_limit_us", "2000\n");
-          	madara_write_node("/sys/devices/system/cpu/cpufreq/schedutil/hispeed_freq", "1800000\n");
-          	madara_write_node("/sys/devices/system/cpu/cpufreq/schedutil/hispeed_load", "75\n");
+
+          	/* 2. Paksa TCP BBR langsung lewat API networking kernel */
+          	tcp_set_default_congestion_control(&init_net, "bbr");
+
+          	/* 3. Matikan MTK PPM Policy 1-3 langsung lewat API driver MTK */
+          #ifdef MADARA_PPM_FN
+          	MADARA_PPM_FN(1, false);
+          	MADARA_PPM_FN(2, false);
+          	MADARA_PPM_FN(3, false);
+          #endif
+          	madara_write_sysfs("/proc/ppm/policy_status", "1 0\n");
+          	madara_write_sysfs("/proc/ppm/policy_status", "2 0\n");
+          	madara_write_sysfs("/proc/ppm/policy_status", "3 0\n");
+
+          	/* 4. Kunci I/O & Schedutil di sysfs */
+          	madara_write_sysfs("/sys/block/mmcblk0/queue/scheduler", "none");
+          	madara_write_sysfs("/sys/block/mmcblk0/queue/read_ahead_kb", "128");
+          	madara_write_sysfs("/sys/devices/system/cpu/cpufreq/schedutil/up_rate_limit_us", "500");
+          	madara_write_sysfs("/sys/devices/system/cpu/cpufreq/schedutil/down_rate_limit_us", "2000");
+          	madara_write_sysfs("/sys/devices/system/cpu/cpufreq/schedutil/hispeed_freq", "1800000");
+          	madara_write_sysfs("/sys/devices/system/cpu/cpufreq/schedutil/hispeed_load", "75");
+
           	madara_pass++;
           	if (madara_pass == 1)
           		schedule_delayed_work(&madara_work, msecs_to_jiffies(35000));
@@ -373,6 +409,7 @@ jobs:
           export CCACHE_EXEC=/usr/bin/ccache
           ccache -M 5G
 
+          sed -i '/CONFIG_DEFAULT_BIC/d;/CONFIG_DEFAULT_CUBIC/d;/CONFIG_DEFAULT_RENO/d;/CONFIG_DEFAULT_TCP_CONG/d' arch/arm64/configs/blossom_defconfig
           make -j$(nproc --all) O=out ARCH=arm64 blossom_defconfig
 
           ./scripts/config --file out/.config \
