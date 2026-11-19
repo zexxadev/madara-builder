@@ -171,22 +171,23 @@ jobs:
                       f.write(w_new)
                   print("Patched Deep Sleep Wakelock Blocker OK")
 
-          # 6. Export fungsi PPM MediaTek agar bisa dipanggil langsung dari madara_tweaks.c
+          # 6. Cari & export fungsi pengubah status policy di driver MTK PPM
           for ppm_f in glob.glob('drivers/misc/mediatek/base/power/ppm*/**/*.c', recursive=True):
               with open(ppm_f, 'r', errors='ignore') as f:
                   ptxt = f.read()
               if 'policy_status_proc_write' in ptxt:
-                  # Deteksi nama fungsi internal disable policy di source MTK
-                  m_fn = re.search(r'\b(mt_ppm_set_policy_status|ppm_main_set_policy_status)\s*\(', ptxt)
-                  if m_fn:
-                      fn_name = m_fn.group(1)
+                  # Cari fungsi yang memodifikasi is_activated / policy_status
+                  candidates = re.findall(r'\b([a-zA-Z0-9_]*(?:policy|activate)[a-zA-Z0-9_]*status[a-zA-Z0-9_]*)\s*\(', ptxt, flags=re.IGNORECASE)
+                  for fn_name in candidates:
+                      if 'proc' in fn_name.lower() or 'show' in fn_name.lower() or 'read' in fn_name.lower():
+                          continue
                       if f'EXPORT_SYMBOL({fn_name})' not in ptxt:
                           ptxt += f'\nEXPORT_SYMBOL({fn_name});\n'
                           with open(ppm_f, 'w') as f:
                               f.write(ptxt)
                       with open('drivers/misc/madara_ppm_api.h', 'w') as hf:
                           hf.write(f'#define MADARA_PPM_FN {fn_name}\n')
-                      print(f"Found & exported {fn_name} in {ppm_f} OK")
+                      print(f"Exported PPM helper {fn_name} from {ppm_f}")
                       break
           EOF
 
