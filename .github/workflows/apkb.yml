@@ -1,4 +1,4 @@
-name: Build BakaSU Manager APK (Send to Telegram)
+name: Build ZexSU Manager APK (Send to Telegram)
 
 on:
   workflow_dispatch:
@@ -24,34 +24,49 @@ jobs:
       ANDROID_HOME: "/usr/local/lib/android/sdk"
       CARGO_INCREMENTAL: "0"
     steps:
+      - name: Checkout madara-builder (for UI assets)
+        uses: actions/checkout@v4
+        with:
+          path: _builder_repo
+
+      - name: Backup custom UI assets
+        run: |
+          rm -rf /tmp/bakasu-ui
+          if [ -d "_builder_repo/Manager/BakaSU/assets/UI" ]; then
+            mkdir -p /tmp/bakasu-ui
+            cp -r "_builder_repo/Manager/BakaSU/assets/UI/." /tmp/bakasu-ui/
+            ls -la /tmp/bakasu-ui
+          else
+            echo "Folder _builder_repo/Manager/BakaSU/assets/UI tidak ditemukan."
+          fi
+
       - name: Checkout BakaSU repository
         uses: actions/checkout@v4
         with:
           repository: Baka-SU/BakaSU
           ref: ${{ inputs.ref }}
           submodules: recursive
-      
+          clean: true
+
       - name: Apply Material Glass UI
         run: |
-          UI_SRC_DIR="Manager/BakaSU/assets/UI"
-          if [ -d "$UI_SRC_DIR" ]; then
+          if [ -d "/tmp/bakasu-ui" ] && [ -n "$(ls -A /tmp/bakasu-ui 2>/dev/null)" ]; then
             TARGET_DIR=$(find manager/app/src/main/java -path "*/ui/theme" -type d | head -n 1)
             if [ -z "$TARGET_DIR" ]; then
               TARGET_DIR="manager/app/src/main/java/org/bakasu/bakasu/ui/theme"
               mkdir -p "$TARGET_DIR"
             fi
-            cp -r "$UI_SRC_DIR"/. "$TARGET_DIR"/
+            cp -r /tmp/bakasu-ui/. "$TARGET_DIR"/
             ls -la "$TARGET_DIR"
           else
-            echo "Folder $UI_SRC_DIR tidak ditemukan, lewati."
+            echo "Tidak ada file UI kustom di /tmp/bakasu-ui, lewati."
           fi
-          
-      - name: Rebrand to ZexSU (UI Name & Package)
+
+      - name: Rebrand to ZexSU (UI Name & applicationId)
         run: |
           NEW_PKG="org.zexsu.manager"
           APP_NAME="ZexSU"
 
-          # 1. Ubah app_name di strings.xml
           find manager/app/src/main/res -name "strings.xml" -type f | while read -r xml; do
             python3 -c '
 import sys, xml.etree.ElementTree as ET
@@ -68,23 +83,19 @@ if changed:
 ' "$xml" "$APP_NAME"
           done
 
-          # 2. Ubah applicationId / namespace di build.gradle(.kts)
           find manager/app -maxdepth 2 -name "build.gradle*" -type f | while read -r gradle_file; do
             sed -i -E "s/(applicationId\s*=?\s*[\"'])[^\"']+([\"'])/\1${NEW_PKG}\2/g" "$gradle_file"
-            sed -i -E "s/(namespace\s*=?\s*[\"'])[^\"']+([\"'])/\1${NEW_PKG}\2/g" "$gradle_file"
           done
 
-          # 3. Ubah teks "BakaSU" / "ReSukiSU" di resource & layout/string UI
-          find manager/app/src/main/res -type f \( -name "*.xml" \) -exec sed -i -E "s/\bBakaSU\b/${APP_NAME}/g; s/\bReSukiSU\b/${APP_NAME}/g" {} +
+          find manager/app/src/main/res -type f -name "*.xml" -exec sed -i -E "s/\bBakaSU\b/${APP_NAME}/g; s/\bReSukiSU\b/${APP_NAME}/g" {} +
 
-          echo "Rebrand selesai: app_name=${APP_NAME}, package=${NEW_PKG}"
+          echo "Rebrand selesai: app_name=${APP_NAME}, applicationId=${NEW_PKG}"
 
       - name: Setup JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: zulu
           java-version: "21"
-          cache: "gradle"
 
       - name: Cache Gradle & Android NDK
         uses: actions/cache@v4
@@ -174,7 +185,7 @@ if changed:
             fi
           fi
 
-          OUT_APK="manager/app/build/outputs/apk/BakaSU-${{ inputs.build_type }}-for-MT-Manager.apk"
+          OUT_APK="manager/app/build/outputs/apk/ZexSU-${{ inputs.build_type }}-for-MT-Manager.apk"
           BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -maxdepth 1 -mindepth 1 | sort -V | tail -n 1)
 
           "$BUILD_TOOLS/zipalign" -p -f 4 "$SRC_APK" "$OUT_APK"
@@ -189,7 +200,10 @@ if changed:
           REF_NAME: ${{ inputs.ref }}
           BUILD_TYPE: ${{ inputs.build_type }}
         run: |
-          CAPTION="BakaSU Manager APK siap sign MT Manager%0ARef: ${REF_NAME}%0AType: ${BUILD_TYPE}%0ARun: ${{ github.run_number }}"
+          CAPTION="ZexSU Manager APK siap sign MT Manager
+Ref: ${REF_NAME}
+Type: ${BUILD_TYPE}
+Run: ${{ github.run_number }}"
           RESP=$(curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
             -F "chat_id=${TG_CHAT_ID}" \
             -F "document=@${APK_PATH}" \
@@ -201,6 +215,6 @@ if changed:
       - name: Upload APK artifact (Backup)
         uses: actions/upload-artifact@v4
         with:
-          name: BakaSU-Manager-${{ inputs.build_type }}
+          name: ZexSU-Manager-${{ inputs.build_type }}
           path: ${{ steps.build_apk.outputs.apk_path }}
           if-no-files-found: error
