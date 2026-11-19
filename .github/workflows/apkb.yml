@@ -70,8 +70,7 @@ jobs:
           find manager/app/src/main/res -name "strings.xml" -type f -exec sed -i -E "s|(<string name=\"app_name\">)[^<]+(</string>)|\1${APP_NAME}\2|g" {} +
           find manager/app -maxdepth 2 -name "build.gradle*" -type f -exec sed -i -E "s/(applicationId\s*=?\s*[\"'])[^\"']+([\"'])/\1${NEW_PKG}\2/g" {} +
           find manager/app/src/main/res -type f -name "*.xml" -exec sed -i -E "s/\bBakaSU\b/${APP_NAME}/g; s/\bReSukiSU\b/${APP_NAME}/g" {} +
-
-          echo "Rebrand selesai: app_name=${APP_NAME}, applicationId=${NEW_PKG}"
+          find manager/app/src/main/java -type f -name "*.kt" -exec sed -i -E "s/\"BakaSU\"/\"${APP_NAME}\"/g; s/\"ReSukiSU\"/\"${APP_NAME}\"/g" {} +
 
       - name: Setup JDK 21
         uses: actions/setup-java@v4
