@@ -61,7 +61,7 @@ jobs:
           restore-keys: |
             ccache-blossom-${{ matrix.variant }}-
 
-      - name: Inject Performance, OC, VM & Network Defaults to Source
+      - name: Inject Performance, OC, Driver & VM Defaults to Source
         working-directory: kernel
         run: |
           python3 - << 'EOF'
@@ -129,14 +129,14 @@ jobs:
           for cpu_f in glob.glob('drivers/misc/mediatek/base/power/cpufreq_v1/**/*.[ch]', recursive=True):
               patch_file(cpu_f, r'\b1500000\b', '1800000', 'Little CPU OC 1.8GHz')
 
-          # 4. Bake VM, ZRAM, MMC & Power Defaults langsung ke C Source
+          # 4. Bake VM, Block I/O (none) & Power Defaults langsung ke C Source
           patch_file('mm/vmscan.c', r'\bint\s+vm_swappiness\s*=\s*60\s*;', 'int vm_swappiness = 120;', 'vm_swappiness=120')
           patch_file('mm/swap.c', r'\bint\s+page_cluster\s*=\s*3\s*;', 'int page_cluster = 0;', 'page-cluster=0')
           patch_file('mm/page-writeback.c', r'\bint\s+vm_dirty_ratio\s*=\s*20\s*;', 'int vm_dirty_ratio = 15;', 'dirty_ratio=15')
           patch_file('mm/page-writeback.c', r'\bint\s+dirty_background_ratio\s*=\s*10\s*;', 'int dirty_background_ratio = 5;', 'dirty_background_ratio=5')
-          patch_file('drivers/mmc/core/core.c', r'\bbool\s+use_spi_crc\s*=\s*1\s*;', 'bool use_spi_crc = 0;', 'use_spi_crc=0')
           patch_file('kernel/power/suspend.c', r'\bbool\s+sync_on_suspend\s*=\s*true\s*;', 'bool sync_on_suspend = false;', 'sync_on_suspend=false')
           patch_file('kernel/sched/fair.c', r'\bunsigned\s+int\s+sysctl_timer_migration\s*=\s*1\s*;', 'unsigned int sysctl_timer_migration = 0;', 'timer_migration=0')
+          patch_file('block/elevator.c', r'elevator_get\(\s*q\s*,\s*"mq-deadline"\s*,\s*false\s*\)', 'NULL', 'blk-mq default none')
 
           # 5. Deep Sleep Wakelock Blocker
           wakeup_file = 'drivers/base/power/wakeup.c'
@@ -172,23 +172,79 @@ jobs:
                   print("Patched Deep Sleep Wakelock Blocker OK")
           EOF
 
-          # 6. Inject Network (BBR + FQ) & Memory Kconfig langsung ke blossom_defconfig
-          cat << 'EOF' >> arch/arm64/configs/blossom_defconfig
-          CONFIG_TCP_CONG_ADVANCED=y
-          CONFIG_TCP_CONG_BBR=y
-          CONFIG_DEFAULT_BBR=y
-          CONFIG_DEFAULT_TCP_CONG="bbr"
-          CONFIG_NET_SCH_FQ=y
-          CONFIG_NET_SCH_DEFAULT=y
-          CONFIG_DEFAULT_FQ=y
-          CONFIG_DEFAULT_NET_SCH="fq"
-          CONFIG_WQ_POWER_EFFICIENT_DEFAULT=y
-          CONFIG_LRU_GEN=y
-          CONFIG_LRU_GEN_ENABLED=y
-          CONFIG_ZRAM_DEDUP=y
-          CONFIG_SWAP_VMA_READAHEAD=y
-          CONFIG_CRYPTO_LZ4=y
+          # 6. Buat driver madara_tweaks.c (Post-boot runtime override anti-timpa ROM)
+          cat << 'EOF' > drivers/misc/madara_tweaks.c
+          #include <linux/module.h>
+          #include <linux/kernel.h>
+          #include <linux/init.h>
+          #include <linux/string.h>
+          #include <linux/workqueue.h>
+          #include <linux/fs.h>
+          #include <linux/proc_fs.h>
+          #include <linux/seq_file.h>
+
+          extern int vm_swappiness;
+          static bool madara_applied;
+          static struct delayed_work madara_work;
+
+          static void madara_write_node(const char *path, const char *val)
+          {
+          	struct file *fp;
+          	loff_t pos = 0;
+
+          	fp = filp_open(path, O_WRONLY, 0);
+          	if (IS_ERR(fp))
+          		return;
+
+          	kernel_write(fp, val, strlen(val), &pos);
+          	filp_close(fp, NULL);
+          }
+
+          static void madara_apply_tweaks(struct work_struct *work)
+          {
+          	vm_swappiness = 120;
+          	madara_write_node("/proc/ppm/policy_status", "1 0");
+          	madara_write_node("/proc/ppm/policy_status", "2 0");
+          	madara_write_node("/proc/ppm/policy_status", "3 0");
+          	madara_write_node("/sys/block/mmcblk0/queue/scheduler", "none");
+          	madara_write_node("/sys/block/mmcblk0/queue/read_ahead_kb", "128");
+          	madara_write_node("/sys/devices/system/cpu/cpufreq/schedutil/up_rate_limit_us", "500");
+          	madara_write_node("/sys/devices/system/cpu/cpufreq/schedutil/down_rate_limit_us", "2000");
+          	madara_write_node("/sys/devices/system/cpu/cpufreq/schedutil/hispeed_freq", "1800000");
+          	madara_write_node("/sys/devices/system/cpu/cpufreq/schedutil/hispeed_load", "75");
+          	madara_applied = true;
+          	pr_info("madara_tweaks: post-boot overrides applied\n");
+          }
+
+          static int madara_status_show(struct seq_file *m, void *v)
+          {
+          	seq_printf(m, "%s\n", madara_applied ? "active" : "pending");
+          	return 0;
+          }
+
+          static int madara_status_open(struct inode *inode, struct file *file)
+          {
+          	return single_open(file, madara_status_show, NULL);
+          }
+
+          static const struct file_operations madara_status_fops = {
+          	.owner = THIS_MODULE,
+          	.open = madara_status_open,
+          	.read = seq_read,
+          	.llseek = seq_lseek,
+          	.release = single_release,
+          };
+
+          static int __init madara_tweaks_init(void)
+          {
+          	proc_create("madara_status", 0444, NULL, &madara_status_fops);
+          	INIT_DELAYED_WORK(&madara_work, madara_apply_tweaks);
+          	schedule_delayed_work(&madara_work, msecs_to_jiffies(30000));
+          	return 0;
+          }
+          late_initcall(madara_tweaks_init);
           EOF
+          echo 'obj-y += madara_tweaks.o' >> drivers/misc/Makefile
 
       - name: Setup Variant (${{ matrix.variant }})
         working-directory: kernel
@@ -310,13 +366,32 @@ jobs:
           make -j$(nproc --all) O=out ARCH=arm64 blossom_defconfig
 
           ./scripts/config --file out/.config \
+            -e TCP_CONG_ADVANCED \
+            -e TCP_CONG_BBR \
+            -e DEFAULT_BBR \
             -d DEFAULT_BIC \
             -d DEFAULT_CUBIC \
             -d DEFAULT_RENO \
+            --set-str DEFAULT_TCP_CONG "bbr" \
+            -e NET_SCH_FQ \
+            -e NET_SCH_DEFAULT \
+            -e DEFAULT_FQ \
+            --set-str DEFAULT_NET_SCH "fq" \
+            -e WQ_POWER_EFFICIENT_DEFAULT \
+            -e LRU_GEN \
+            -e LRU_GEN_ENABLED \
+            -e ZRAM_DEDUP \
+            -e SWAP_VMA_READAHEAD \
+            -e CRYPTO_LZ4 \
             --set-str LOCALVERSION "-madaraKernel" \
             -d LOCALVERSION_AUTO
 
           make -j$(nproc --all) O=out ARCH=arm64 olddefconfig
+
+          grep -q 'CONFIG_DEFAULT_TCP_CONG="bbr"' out/.config || {
+            echo "ERROR: CONFIG_DEFAULT_TCP_CONG gagal diset ke bbr!"
+            exit 1
+          }
 
           if [ "${{ matrix.variant }}" == "RSKSU-SusFS" ]; then
             grep -q "^CONFIG_KSU=y" out/.config || exit 1
@@ -343,7 +418,7 @@ jobs:
 
           ccache -s
 
-      - name: Pack AnyKernel3 (Native ramdisk/overlay.d)
+      - name: Pack AnyKernel3
         run: |
           git clone --depth=1 https://github.com/zexxadev/AnyKernel3-blossom.git anykernel
           cp kernel/out/arch/arm64/boot/Image.gz-dtb anykernel/
@@ -385,37 +460,13 @@ jobs:
           ## end install
           EOF
 
-          # Gunakan fungsi bawaan AnyKernel3: folder ramdisk/ otomatis digabung ke boot.img
-          mkdir -p ramdisk/overlay.d
-          cat << 'EOF' > ramdisk/overlay.d/init.madara.rc
-          on property:sys.boot_completed=1
-              setprop madara.tweak.status active
-              write /proc/sys/net/core/default_qdisc fq
-              write /proc/sys/net/ipv4/tcp_congestion_control bbr
-              write /proc/sys/net/ipv4/tcp_fastopen 3
-              write /sys/block/mmcblk0/queue/scheduler none
-              write /sys/block/mmcblk0/queue/read_ahead_kb 128
-              write /proc/ppm/policy_status "1 0"
-              write /proc/ppm/policy_status "2 0"
-              write /proc/ppm/policy_status "3 0"
-              write /sys/power/mem_sleep "deep"
-              write /sys/devices/system/cpu/cpufreq/schedutil/up_rate_limit_us 500
-              write /sys/devices/system/cpu/cpufreq/schedutil/down_rate_limit_us 2000
-              write /sys/devices/system/cpu/cpufreq/schedutil/hispeed_freq 1800000
-              write /sys/devices/system/cpu/cpufreq/schedutil/hispeed_load 75
-              write /proc/perfmgr/tchbst/user/usrtch 1
-              write /proc/perfmgr/boost_ctrl/eas_ctrl/perfserv_ta_uclamp_min 15
-          EOF
-          chmod 0750 ramdisk/overlay.d
-          chmod 0644 ramdisk/overlay.d/init.madara.rc
-
           rm -rf .git README.md
           ZIP_NAME="madaraKernel-blossom-${{ matrix.variant }}-$(date +%Y%m%d).zip"
           zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" .
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
-          unzip -l "$GITHUB_WORKSPACE/$ZIP_NAME" | grep -q "ramdisk/overlay.d/init.madara.rc" || exit 1
-          echo "OK: $ZIP_NAME valid dengan native ramdisk/overlay.d."
+          unzip -l "$GITHUB_WORKSPACE/$ZIP_NAME" | grep -q "META-INF/com/google/android/update-binary" || exit 1
+          echo "OK: $ZIP_NAME valid dan siap flash."
 
       - name: Publish to niigo_kernel_xiaomi_blossom
         uses: softprops/action-gh-release@v2
