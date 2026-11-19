@@ -64,10 +64,11 @@ jobs:
           fi
           echo "ANDROID_NDK_ROOT=$NDK_DIR" >> "$GITHUB_ENV"
 
-      - name: Setup Rust toolchain for Android arm64
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust nightly toolchain for Android arm64
+        uses: dtolnay/rust-toolchain@nightly
         with:
           targets: aarch64-linux-android
+          components: rust-src
 
       - name: Cache Cargo registry & target
         uses: actions/cache@v4
@@ -78,9 +79,9 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git
             **/target/aarch64-linux-android
-          key: cargo-arm64-${{ runner.os }}-${{ inputs.ref }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-nightly-arm64-${{ runner.os }}-${{ inputs.ref }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-arm64-${{ runner.os }}-
+            cargo-nightly-arm64-${{ runner.os }}-
 
       - name: Build libksud.so for arm64-v8a
         env:
@@ -148,3 +149,10 @@ jobs:
 
           echo "$RESP"
           echo "$RESP" | grep -q '"ok":true'
+
+      - name: Upload APK artifact (Backup)
+        uses: actions/upload-artifact@v4
+        with:
+          name: BakaSU-Manager-${{ inputs.build_type }}
+          path: ${{ steps.build_apk.outputs.apk_path }}
+          if-no-files-found: error
