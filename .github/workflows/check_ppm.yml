@@ -1,0 +1,30 @@
+name: Check MTK PPM Source
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/check_ppm.yml'
+
+jobs:
+  inspect-ppm:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Clone Kernel Source (niigo_yoka)
+        run: |
+          git clone --depth=1 -b niigo_yoka https://github.com/zexxadev/niigo_kernel_xiaomi_blossom.git kernel
+
+      - name: Inspect MTK PPM Files & Functions
+        working-directory: kernel
+        run: |
+          echo "=== 1. DAFTAR FILE PPM ==="
+          find drivers/misc/mediatek -iname "*ppm*"
+
+          echo -e "\n=== 2. ISI POLICY_STATUS_PROC_WRITE & FUNGSI AKTIVASI ==="
+          grep -rn -C 18 "policy_status_proc_write" drivers/misc/mediatek/
+
+          echo -e "\n=== 3. DEKLARASI STRUCT POLICY (UT / FORCE_LIMIT / PWR_THRO) ==="
+          grep -rn -B 5 -A 15 "PPM_POLICY_UT" drivers/misc/mediatek/
+
+          echo -e "\n=== 4. HEADER API PPM ==="
+          find drivers/misc/mediatek -iname "*ppm*.h" -exec head -n 120 {} +
