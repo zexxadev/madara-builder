@@ -105,7 +105,7 @@ jobs:
                       new_content = new_content.replace(old_p, NEW_PKG)
                       new_content = new_content.replace(old_jni, NEW_JNI)
                       new_content = new_content.replace(old_sym, NEW_SYM)
-                  new_content = re.sub(r'\b(BakaSU|Baka-SU|ReSukiSU)\b', 'ZexSU', new_content)
+                  new_content = re.sub(r'(?<!github\.com/)\b(BakaSU|Baka-SU|ReSukiSU)\b', 'ZexSU', new_content)
                   if new_content != content:
                       with open(fp, "w", encoding="utf-8") as f:
                           f.write(new_content)
@@ -185,6 +185,7 @@ jobs:
         working-directory: zexsu_src
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/26.1.10909125"
+          export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
           USERSPACE_DIR=$(find . -maxdepth 3 -name "Cargo.toml" -exec dirname {} \; | head -n 1)
           cd "$USERSPACE_DIR"
           RUSTUP_TOOLCHAIN=nightly cargo ndk -t arm64-v8a --platform 26 build --release
