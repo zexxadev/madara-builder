@@ -25,7 +25,7 @@ jobs:
       - name: Generate Auto-Changelog
         run: |
           cd builder
-          LOGS=$(git log -n 5 --pretty=format:"• %s" | sed 's/"/\\"/g')
+          LOGS=$(git log -n 5 --pretty=format:"• %s")
           {
             echo "CHANGELOG<<EOF"
             echo "$LOGS"
@@ -106,7 +106,6 @@ jobs:
                   f.write(feat_new)
 
           # 2. GPU Overclock PowerVR GE8320 -> 730 MHz
-          gpu_patched = False
           for pattern in ['drivers/misc/mediatek/**/*.[ch]', 'drivers/gpu/**/*.[ch]']:
               for path in glob.glob(pattern, recursive=True):
                   if 'cpufreq' in path or 'eem' in path:
@@ -129,7 +128,6 @@ jobs:
                       with open(path, 'w') as f:
                           f.write(new_txt)
                       print(f"Patched GPU OC 730MHz in {path} ({n2} entries) OK")
-                      gpu_patched = True
 
           for dts in glob.glob('arch/arm64/boot/dts/**/*.dts*', recursive=True):
               with open(dts, 'r', errors='ignore') as f:
@@ -140,7 +138,6 @@ jobs:
                       with open(dts, 'w') as f:
                           f.write(d_new)
                       print(f"Patched GPU DTS OPP 730MHz in {dts} ({n_dts} entries) OK")
-                      gpu_patched = True
 
           # 3. CPU Overclock Little Cluster (1.5 GHz -> 1.8 GHz)
           for cpu_f in glob.glob(
@@ -327,6 +324,8 @@ jobs:
             -e ZRAM_DEDUP \
             -e SWAP_VMA_READAHEAD \
             -e CRYPTO_LZ4 \
+            -e KCOMPRESSD \
+            -e KSHRINKD \
             --set-str LOCALVERSION "-madaraKernel" \
             -d LOCALVERSION_AUTO
 
@@ -396,13 +395,14 @@ jobs:
 
           dump_boot;
 
-          # Inject overlay.d langsung ke /tmp/anykernel/ramdisk
-          mkdir -p /tmp/anykernel/ramdisk/overlay.d;
+          # Inject init.madara.rc & systemless vendor GPS overlay ke /tmp/anykernel/ramdisk/overlay.d
+          mkdir -p /tmp/anykernel/ramdisk/overlay.d/vendor/etc;
           cp -f /tmp/anykernel/init.madara.rc /tmp/anykernel/ramdisk/overlay.d/init.madara.rc;
-          cp -f /tmp/anykernel/madara_gps.conf /tmp/anykernel/ramdisk/overlay.d/madara_gps.conf;
+          cp -f /tmp/anykernel/madara_gps.conf /tmp/anykernel/ramdisk/overlay.d/vendor/etc/gps.conf;
           chmod 0750 /tmp/anykernel/ramdisk/overlay.d;
-          chmod 0644 /tmp/anykernel/ramdisk/overlay.d/init.madara.rc /tmp/anykernel/ramdisk/overlay.d/madara_gps.conf;
-          chown 0:0 /tmp/anykernel/ramdisk/overlay.d /tmp/anykernel/ramdisk/overlay.d/init.madara.rc /tmp/anykernel/ramdisk/overlay.d/madara_gps.conf;
+          chmod 0755 /tmp/anykernel/ramdisk/overlay.d/vendor /tmp/anykernel/ramdisk/overlay.d/vendor/etc;
+          chmod 0644 /tmp/anykernel/ramdisk/overlay.d/init.madara.rc /tmp/anykernel/ramdisk/overlay.d/vendor/etc/gps.conf;
+          chown 0:0 /tmp/anykernel/ramdisk/overlay.d /tmp/anykernel/ramdisk/overlay.d/init.madara.rc /tmp/anykernel/ramdisk/overlay.d/vendor /tmp/anykernel/ramdisk/overlay.d/vendor/etc /tmp/anykernel/ramdisk/overlay.d/vendor/etc/gps.conf;
 
           write_boot;
           ## end install
@@ -430,39 +430,32 @@ jobs:
 
           cat << 'EOF' > init.madara.rc
           on property:sys.boot_completed=1
-              start madara_tweak
-
-          service madara_tweak /system/bin/sh -c "sleep 5; \
-              echo 120 > /proc/sys/vm/swappiness; \
-              echo 100 > /proc/sys/vm/vfs_cache_pressure; \
-              echo 0 > /proc/sys/vm/page-cluster; \
-              echo 15 > /proc/sys/vm/dirty_ratio; \
-              echo 5 > /proc/sys/vm/dirty_background_ratio; \
-              echo 24300 > /proc/sys/vm/extra_free_kbytes; \
-              echo fq > /proc/sys/net/core/default_qdisc; \
-              echo bbr > /proc/sys/net/ipv4/tcp_congestion_control; \
-              echo 3 > /proc/sys/net/ipv4/tcp_fastopen; \
-              echo none > /sys/block/mmcblk0/queue/scheduler; \
-              echo 128 > /sys/block/mmcblk0/queue/read_ahead_kb; \
-              echo 0 > /sys/module/mmc_core/parameters/use_spi_crc; \
-              echo '1 0' > /proc/ppm/policy_status; \
-              echo '2 0' > /proc/ppm/policy_status; \
-              echo '3 0' > /proc/ppm/policy_status; \
-              echo deep > /sys/power/mem_sleep; \
-              echo Y > /sys/module/workqueue/parameters/power_efficient; \
-              echo 0 > /proc/sys/kernel/timer_migration; \
-              echo 0 > /sys/power/sync_on_suspend; \
-              echo 500 > /sys/devices/system/cpu/cpufreq/schedutil/up_rate_limit_us; \
-              echo 2000 > /sys/devices/system/cpu/cpufreq/schedutil/down_rate_limit_us; \
-              echo 1800000 > /sys/devices/system/cpu/cpufreq/schedutil/hispeed_freq; \
-              echo 75 > /sys/devices/system/cpu/cpufreq/schedutil/hispeed_load; \
-              echo 1 > /proc/perfmgr/tchbst/user/usrtch; \
-              echo 15 > /proc/perfmgr/boost_ctrl/eas_ctrl/perfserv_ta_uclamp_min; \
-              mount --bind /overlay.d/madara_gps.conf /vendor/etc/gps.conf"
-              class late_start
-              user root
-              group root
-              oneshot
+              setprop madara.tweak.status active
+              write /proc/sys/vm/swappiness 120
+              write /proc/sys/vm/vfs_cache_pressure 100
+              write /proc/sys/vm/page-cluster 0
+              write /proc/sys/vm/dirty_ratio 15
+              write /proc/sys/vm/dirty_background_ratio 5
+              write /proc/sys/vm/extra_free_kbytes 24300
+              write /proc/sys/net/core/default_qdisc fq
+              write /proc/sys/net/ipv4/tcp_congestion_control bbr
+              write /proc/sys/net/ipv4/tcp_fastopen 3
+              write /sys/block/mmcblk0/queue/scheduler none
+              write /sys/block/mmcblk0/queue/read_ahead_kb 128
+              write /sys/module/mmc_core/parameters/use_spi_crc 0
+              write /proc/ppm/policy_status "1 0"
+              write /proc/ppm/policy_status "2 0"
+              write /proc/ppm/policy_status "3 0"
+              write /sys/power/mem_sleep "deep"
+              write /sys/module/workqueue/parameters/power_efficient Y
+              write /proc/sys/kernel/timer_migration 0
+              write /sys/power/sync_on_suspend 0
+              write /sys/devices/system/cpu/cpufreq/schedutil/up_rate_limit_us 500
+              write /sys/devices/system/cpu/cpufreq/schedutil/down_rate_limit_us 2000
+              write /sys/devices/system/cpu/cpufreq/schedutil/hispeed_freq 1800000
+              write /sys/devices/system/cpu/cpufreq/schedutil/hispeed_load 75
+              write /proc/perfmgr/tchbst/user/usrtch 1
+              write /proc/perfmgr/boost_ctrl/eas_ctrl/perfserv_ta_uclamp_min 15
           EOF
           chmod 0644 init.madara.rc
 
