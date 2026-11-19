@@ -30,6 +30,54 @@ jobs:
           repository: Baka-SU/BakaSU
           ref: ${{ inputs.ref }}
           submodules: recursive
+      
+      - name: Apply Material Glass UI
+        run: |
+          UI_SRC_DIR="Manager/BakaSU/assets/UI"
+          if [ -d "$UI_SRC_DIR" ]; then
+            TARGET_DIR=$(find manager/app/src/main/java -path "*/ui/theme" -type d | head -n 1)
+            if [ -z "$TARGET_DIR" ]; then
+              TARGET_DIR="manager/app/src/main/java/org/bakasu/bakasu/ui/theme"
+              mkdir -p "$TARGET_DIR"
+            fi
+            cp -r "$UI_SRC_DIR"/. "$TARGET_DIR"/
+            ls -la "$TARGET_DIR"
+          else
+            echo "Folder $UI_SRC_DIR tidak ditemukan, lewati."
+          fi
+          
+      - name: Rebrand to ZexSU (UI Name & Package)
+        run: |
+          NEW_PKG="org.zexsu.manager"
+          APP_NAME="ZexSU"
+
+          # 1. Ubah app_name di strings.xml
+          find manager/app/src/main/res -name "strings.xml" -type f | while read -r xml; do
+            python3 -c '
+import sys, xml.etree.ElementTree as ET
+path, name = sys.argv[1], sys.argv[2]
+tree = ET.parse(path)
+root = tree.getroot()
+changed = False
+for elem in root.findall("string"):
+    if elem.get("name") == "app_name":
+        elem.text = name
+        changed = True
+if changed:
+    tree.write(path, encoding="utf-8", xml_declaration=True)
+' "$xml" "$APP_NAME"
+          done
+
+          # 2. Ubah applicationId / namespace di build.gradle(.kts)
+          find manager/app -maxdepth 2 -name "build.gradle*" -type f | while read -r gradle_file; do
+            sed -i -E "s/(applicationId\s*=?\s*[\"'])[^\"']+([\"'])/\1${NEW_PKG}\2/g" "$gradle_file"
+            sed -i -E "s/(namespace\s*=?\s*[\"'])[^\"']+([\"'])/\1${NEW_PKG}\2/g" "$gradle_file"
+          done
+
+          # 3. Ubah teks "BakaSU" / "ReSukiSU" di resource & layout/string UI
+          find manager/app/src/main/res -type f \( -name "*.xml" \) -exec sed -i -E "s/\bBakaSU\b/${APP_NAME}/g; s/\bReSukiSU\b/${APP_NAME}/g" {} +
+
+          echo "Rebrand selesai: app_name=${APP_NAME}, package=${NEW_PKG}"
 
       - name: Setup JDK 21
         uses: actions/setup-java@v4
