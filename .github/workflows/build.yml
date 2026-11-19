@@ -1,4 +1,4 @@
-name: Build madaraKernel Blossom (Dual-Variant)
+name: Build madaraKernel Blossom & ZexSU Manager
 
 on:
   workflow_dispatch:
@@ -7,8 +7,279 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build (${{ matrix.variant }})
+  build-zexsu:
+    name: Build ZexSU Manager (Material Glass)
+    runs-on: ubuntu-22.04
+    outputs:
+      cert_size: ${{ steps.sign_apk.outputs.cert_size }}
+      cert_hash: ${{ steps.sign_apk.outputs.cert_hash }}
+
+    steps:
+      - name: Checkout Builder Repo (for Changelog)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 5
+          path: builder
+
+      - name: Generate Auto-Changelog
+        run: |
+          cd builder
+          LOGS=$(git log -n 5 --pretty=format:"• %s")
+          {
+            echo "CHANGELOG<<EOF"
+            echo "$LOGS"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Android SDK & NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android Build-Tools, NDK & Rust Nightly
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "build-tools;34.0.0" "platforms;android-34" "ndk;26.1.10909125"
+          rustup toolchain install nightly --profile minimal
+          rustup target add aarch64-linux-android --toolchain nightly
+          cargo install cargo-ndk --locked
+
+      - name: Clone BakaSU Manager Source
+        run: |
+          git clone --depth=1 https://github.com/Baka-SU/BakaSU.git zexsu_src
+
+      - name: Rebrand to ZexSU (org.zexsu.manager) & Inject Material Glass UI
+        working-directory: zexsu_src
+        run: |
+          python3 - << 'PY'
+          import glob, os, re
+
+          OLD_PKG = "org.bakasu.manager"
+          NEW_PKG = "org.zexsu.manager"
+
+          # 1. Deteksi package asli dari build.gradle / AndroidManifest
+          for gradle in glob.glob("manager/**/build.gradle*", recursive=True):
+              with open(gradle, "r", encoding="utf-8", errors="ignore") as f:
+                  txt = f.read()
+              m = re.search(r'(?:namespace|applicationId)\s*[= ]\s*["\']([^"\']+)["\']', txt)
+              if m:
+                  OLD_PKG = m.group(1)
+                  break
+
+          print(f"Rebranding package: {OLD_PKG} -> {NEW_PKG}")
+
+          # 2. Ganti package & nama aplikasi di seluruh source manager
+          exts = (".kt", ".java", ".xml", ".kts", ".gradle", ".pro", ".aidl", ".rs", ".c", ".h")
+          for root, _, files in os.walk("."):
+              if ".git" in root:
+                  continue
+              for fn in files:
+                  if not fn.endswith(exts):
+                      continue
+                  fp = os.path.join(root, fn)
+                  with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                      content = f.read()
+                  new_content = content.replace(OLD_PKG, NEW_PKG)
+                  new_content = new_content.replace("BakaSU", "ZexSU").replace("Baka-SU", "ZexSU")
+                  if new_content != content:
+                      with open(fp, "w", encoding="utf-8") as f:
+                          f.write(new_content)
+
+          # 3. Suntikkan aset & tema Material Glass ke res/values/
+          res_values = "manager/app/src/main/res/values"
+          if not os.path.isdir(res_values):
+              candidates = glob.glob("**/src/main/res/values", recursive=True)
+              if candidates:
+                  res_values = candidates[0]
+
+          os.makedirs(res_values, exist_ok=True)
+          with open(os.path.join(res_values, "zexsu_material_glass.xml"), "w", encoding="utf-8") as f:
+              f.write('''<?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <!-- Material Glass Translucent Palette -->
+              <color name="glass_surface_dark">#B312161F</color>
+              <color name="glass_surface_light">#CCFFFFFF</color>
+              <color name="glass_card_stroke">#33FFFFFF</color>
+              <color name="glass_accent_cyan">#FF38BDF8</color>
+              <color name="glass_accent_indigo">#FF818CF8</color>
+          </resources>
+          ''')
+
+          # 4. Injeksi Compose Material Glass helper bila pakai Jetpack Compose
+          kt_dirs = glob.glob("manager/**/src/main/java/**/ui/theme", recursive=True) + \
+                    glob.glob("manager/**/src/main/kotlin/**/ui/theme", recursive=True)
+          for tdir in kt_dirs:
+              pkg_path = tdir.split("src/main/java/")[-1].split("src/main/kotlin/")[-1].replace("/", ".")
+              with open(os.path.join(tdir, "MaterialGlass.kt"), "w", encoding="utf-8") as f:
+                  f.write(f'''package {pkg_path}
+
+          import androidx.compose.foundation.BorderStroke
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.draw.clip
+          import androidx.compose.ui.graphics.Brush
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.unit.dp
+
+          val GlassCardGradient = Brush.verticalGradient(
+              colors = listOf(
+                  Color(0x38FFFFFF),
+                  Color(0x14FFFFFF)
+              )
+          )
+
+          val GlassBorder = BorderStroke(
+              width = 1.dp,
+              brush = Brush.verticalGradient(
+                  colors = listOf(
+                      Color(0x55FFFFFF),
+                      Color(0x18FFFFFF)
+                  )
+              )
+          )
+
+          val GlassShape = RoundedCornerShape(22.dp)
+          ''')
+          print("Material Glass assets injected OK")
+          PY
+
+      - name: Build libksud.so (arm64-v8a) with Rust Nightly
+        working-directory: zexsu_src
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/26.1.10909125"
+          USERSPACE_DIR=$(find . -maxdepth 3 -name "Cargo.toml" -exec dirname {} \; | head -n 1)
+          JNI_DIR=$(find manager -type d -name "jniLibs" | head -n 1)
+          [ -z "$JNI_DIR" ] && JNI_DIR="manager/app/src/main/jniLibs"
+          mkdir -p "$JNI_DIR/arm64-v8a"
+
+          cd "$USERSPACE_DIR"
+          RUSTUP_TOOLCHAIN=nightly cargo ndk -t arm64-v8a --platform 26 build --release
+          cp target/aarch64-linux-android/release/libksud.so "$GITHUB_WORKSPACE/zexsu_src/$JNI_DIR/arm64-v8a/libksud.so"
+
+      - name: Build Unsigned Release APK
+        working-directory: zexsu_src/manager
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Zipalign, Sign APK & Extract Certificate Hash
+        id: sign_apk
+        run: |
+          BUILD_TOOLS="$ANDROID_SDK_ROOT/build-tools/34.0.0"
+          RAW_APK=$(find zexsu_src/manager -name "*release*.apk" | head -n 1)
+          [ -f "$RAW_APK" ] || { echo "ERROR: APK release tidak ditemukan!"; exit 1; }
+
+          if [ -n "${{ secrets.ZEXSU_KEYSTORE_B64 }}" ]; then
+            echo "${{ secrets.ZEXSU_KEYSTORE_B64 }}" | base64 -d > zexsu.jks
+            KS_PASS="${{ secrets.ZEXSU_KS_PASS }}"
+            KS_ALIAS="${{ secrets.ZEXSU_KS_ALIAS }}"
+          else
+            KS_PASS="zexsu1234"
+            KS_ALIAS="zexsu"
+            keytool -genkeypair -v -keystore zexsu.jks -alias "$KS_ALIAS" \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$KS_PASS" -keypass "$KS_PASS" \
+              -dname "CN=ZexSU, OU=ZexxaDev, O=madaraKernel, L=ID, ST=ID, C=ID"
+          fi
+
+          "$BUILD_TOOLS/zipalign" -f -p 4 "$RAW_APK" aligned.apk
+          APK_OUT="$GITHUB_WORKSPACE/ZexSU-MaterialGlass-$(date +%Y%m%d).apk"
+          "$BUILD_TOOLS/apksigner" sign --ks zexsu.jks --ks-key-alias "$KS_ALIAS" \
+            --ks-pass "pass:$KS_PASS" --key-pass "pass:$KS_PASS" \
+            --out "$APK_OUT" aligned.apk
+
+          # Ekstrak CERT_SIZE & CERT_HASH (SHA-256) langsung dari sertifikat APK
+          python3 - "$APK_OUT" << 'PY'
+          import hashlib, os, subprocess, sys
+
+          apk_path = sys.argv[1]
+          out = subprocess.check_output(["keytool", "-printcert", "-jarfile", apk_path], text=True)
+          sha256_match = None
+          for line in out.splitlines():
+              if "SHA256:" in line:
+                  sha256_match = line.split("SHA256:")[1].strip().replace(":", "").lower()
+                  break
+
+          # Ambil ukuran DER certificate di META-INF/*.RSA atau *.EC
+          import zipfile
+          cert_size = 0
+          with zipfile.ZipFile(apk_path, "r") as zf:
+              for name in zf.namelist():
+                  if name.startswith("META-INF/") and name.endswith((".RSA", ".EC", ".DSA")):
+                      cert_bytes = zf.read(name)
+                      # Ekstrak X.509 cert via openssl pkcs7
+                      p = subprocess.run(
+                          ["openssl", "pkcs7", "-inform", "DER", "-print_certs", "-outform", "PEM"],
+                          input=cert_bytes, capture_output=True, check=True
+                      )
+                      der = subprocess.run(
+                          ["openssl", "x509", "-outform", "DER"],
+                          input=p.stdout, capture_output=True, check=True
+                      ).stdout
+                      cert_size = len(der)
+                      sha256_match = hashlib.sha256(der).hexdigest()
+                      break
+
+          print(f"Extracted ZexSU Cert -> SIZE={cert_size}, HASH={sha256_match}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as gh_out:
+              gh_out.write(f"cert_size={cert_size}\n")
+              gh_out.write(f"cert_hash={sha256_match}\n")
+          PY
+
+          echo "APK_OUT=$APK_OUT" >> "$GITHUB_ENV"
+
+      - name: Send ZexSU APK to Telegram
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          APK_OUT: ${{ env.APK_OUT }}
+          CERT_SIZE: ${{ steps.sign_apk.outputs.cert_size }}
+          CERT_HASH: ${{ steps.sign_apk.outputs.cert_hash }}
+        run: |
+          python3 - << 'EOF'
+          import hashlib, os, urllib.request, uuid
+
+          file_path = os.environ["APK_OUT"]
+          with open(file_path, "rb") as f:
+              file_data = f.read()
+
+          md5_hash = hashlib.md5(file_data).hexdigest()
+          caption = (
+              f"<b>ZexSU Manager (Material Glass)</b>\n"
+              f"Package: <code>org.zexsu.manager</code>\n"
+              f"Cert Size: <code>{os.environ['CERT_SIZE']}</code>\n"
+              f"SHA-256: <code>{os.environ['CERT_HASH']}</code>\n"
+              f"MD5: <code>{md5_hash}</code>"
+          )
+
+          boundary = f"----WebKitFormBoundary{uuid.uuid4().hex}"
+          body = bytearray()
+          for key, val in {"chat_id": os.environ["TG_CHAT_ID"], "caption": caption, "parse_mode": "HTML"}.items():
+              body.extend(f"--{boundary}\r\n".encode())
+              body.extend(f'Content-Disposition: form-data; name="{key}"\r\n\r\n{val}\r\n'.encode())
+
+          body.extend(f"--{boundary}\r\n".encode())
+          body.extend(
+              f'Content-Disposition: form-data; name="document"; filename="{os.path.basename(file_path)}"\r\n'
+              f"Content-Type: application/vnd.android.package-archive\r\n\r\n".encode()
+          )
+          body.extend(file_data)
+          body.extend(f"\r\n--{boundary}--\r\n".encode())
+
+          url = f"https://api.telegram.org/bot{os.environ['TG_BOT_TOKEN']}/sendDocument"
+          req = urllib.request.Request(url, data=bytes(body))
+          req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+          with urllib.request.urlopen(req, timeout=120) as resp:
+              print("Telegram APK upload sukses:", resp.status)
+          EOF
+
+  build-kernel:
+    name: Build Kernel (${{ matrix.variant }})
+    needs: build-zexsu
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
@@ -210,7 +481,7 @@ jobs:
                   print(f"Patched madara_disable_ppm_policies in {ppm_f} OK")
           EOF
 
-          # 7. Buat driver madara_tweaks.c (Direct Kernel API + Memory Variable Override)
+          # 7. Buat driver madara_tweaks.c (Direct Kernel API + set_fs KERNEL_DS)
           cat << 'EOF' > drivers/misc/madara_tweaks.c
           #include <linux/module.h>
           #include <linux/kernel.h>
@@ -218,6 +489,7 @@ jobs:
           #include <linux/string.h>
           #include <linux/workqueue.h>
           #include <linux/fs.h>
+          #include <linux/uaccess.h>
           #include <linux/proc_fs.h>
           #include <linux/seq_file.h>
           #include <net/net_namespace.h>
@@ -233,28 +505,25 @@ jobs:
           {
           	struct file *fp;
           	loff_t pos = 0;
+          	mm_segment_t old_fs = get_fs();
 
+          	set_fs(KERNEL_DS);
           	fp = filp_open(path, O_WRONLY, 0);
-          	if (IS_ERR(fp))
-          		return;
-
-          	kernel_write(fp, val, strlen(val), &pos);
-          	filp_close(fp, NULL);
+          	if (!IS_ERR(fp)) {
+          		kernel_write(fp, val, strlen(val), &pos);
+          		filp_close(fp, NULL);
+          	}
+          	set_fs(old_fs);
           }
 
           static void madara_apply_tweaks(struct work_struct *work)
           {
-          	/* 1. Kunci vm_swappiness langsung di variabel kernel */
           	vm_swappiness = 120;
-
-          	/* 2. Paksa TCP BBR langsung lewat API networking kernel */
           	tcp_set_default_congestion_control(&init_net, "bbr");
 
-          	/* 3. Matikan MTK PPM Policy 1-3 langsung lewat hook mtk_ppm_interface.c */
           	if (madara_disable_ppm_policies)
           		madara_disable_ppm_policies();
 
-          	/* 4. Kunci I/O & Schedutil di sysfs */
           	madara_write_sysfs("/sys/block/mmcblk0/queue/scheduler", "none");
           	madara_write_sysfs("/sys/block/mmcblk0/queue/read_ahead_kb", "128");
           	madara_write_sysfs("/sys/devices/system/cpu/cpufreq/schedutil/up_rate_limit_us", "500");
@@ -303,14 +572,53 @@ jobs:
           EOF
           echo 'obj-y += madara_tweaks.o' >> drivers/misc/Makefile
 
-      - name: Setup Variant (${{ matrix.variant }})
+      - name: Setup Variant (${{ matrix.variant }}) & Sync ZexSU Signature
         working-directory: kernel
+        env:
+          ZEXSU_SIZE: ${{ needs.build-zexsu.outputs.cert_size }}
+          ZEXSU_HASH: ${{ needs.build-zexsu.outputs.cert_hash }}
         run: |
           if [ "${{ matrix.variant }}" == "RSKSU-SusFS" ]; then
             KSU_REF="d5e9e025b8b49155f8014684d64c91742b465f65"
             curl -LSs \
               "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" \
               | bash -s "$KSU_REF"
+
+            # Suntikkan package org.zexsu.manager + CERT_SIZE & CERT_HASH ke driver KernelSU
+            python3 - << 'PY'
+          import glob, os, re
+
+          z_size = os.environ["ZEXSU_SIZE"]
+          z_hash = os.environ["ZEXSU_HASH"]
+          z_pkg = "org.zexsu.manager"
+
+          # 1. Patch Kbuild / Makefile EXPECTED_SIZE & EXPECTED_HASH
+          for kb in glob.glob("drivers/kernelsu/**/Kbuild", recursive=True) + glob.glob("drivers/kernelsu/**/Makefile", recursive=True):
+              with open(kb, "r") as f:
+                  txt = f.read()
+              new_txt = re.sub(r'(-DEXPECTED_SIZE=)(?:0x[0-9a-fA-F]+|\d+)', rf'\g<1>{z_size}', txt)
+              new_txt = re.sub(r'(-DEXPECTED_HASH=\\?")[^\\"]+ (\\?")', rf'\g<1>{z_hash}\g<2>', new_txt)
+              new_txt = re.sub(r'(-DEXPECTED_HASH=\\?")[0-9a-fA-F]{64}(\\?")', rf'\g<1>{z_hash}\g<2>', new_txt)
+              new_txt = re.sub(r'(-DKSU_MANAGER_PACKAGE=\\?")[^\\"]+ (\\?")', rf'\g<1>{z_pkg}\g<2>', new_txt)
+              if new_txt != txt:
+                  with open(kb, "w") as f:
+                      f.write(new_txt)
+                  print(f"Synced ZexSU signature in {kb}")
+
+          # 2. Patch apk_sign.c & pkg_observer.c sebagai fallback langsung di C
+          for cfile in glob.glob("drivers/kernelsu/**/*.[ch]", recursive=True):
+              with open(cfile, "r", errors="ignore") as f:
+                  ctxt = f.read()
+              orig = ctxt
+              ctxt = re.sub(r'(#define\s+EXPECTED_SIZE\s+)(?:0x[0-9a-fA-F]+|\d+)', rf'\g<1>{z_size}', ctxt)
+              ctxt = re.sub(r'(#define\s+EXPECTED_HASH\s+")([0-9a-fA-F]{64})(")', rf'\g<1>{z_hash}\g<3>', ctxt)
+              for old_mgr in ("me.weishu.kernelsu", "com.rifsxd.ksunext", "com.resukisu.manager", "org.bakasu.manager"):
+                  ctxt = ctxt.replace(old_mgr, z_pkg)
+              if ctxt != orig:
+                  with open(cfile, "w") as f:
+                      f.write(ctxt)
+                  print(f"Synced ZexSU package/cert in {cfile}")
+          PY
 
             git clone --depth=1 \
               https://github.com/fabiannabil1/susfs-4.19-nongki.git \
@@ -533,7 +841,7 @@ jobs:
             ${{ env.CHANGELOG }}
           files: ${{ env.ZIP_NAME }}
           prerelease: true
-          make_latest: true
+          make_latest: false
 
       - name: Send Flashable ZIP & MD5 to Telegram
         env:
