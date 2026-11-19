@@ -67,26 +67,8 @@ jobs:
           NEW_PKG="org.zexsu.manager"
           APP_NAME="ZexSU"
 
-          find manager/app/src/main/res -name "strings.xml" -type f | while read -r xml; do
-            python3 -c '
-import sys, xml.etree.ElementTree as ET
-path, name = sys.argv[1], sys.argv[2]
-tree = ET.parse(path)
-root = tree.getroot()
-changed = False
-for elem in root.findall("string"):
-    if elem.get("name") == "app_name":
-        elem.text = name
-        changed = True
-if changed:
-    tree.write(path, encoding="utf-8", xml_declaration=True)
-' "$xml" "$APP_NAME"
-          done
-
-          find manager/app -maxdepth 2 -name "build.gradle*" -type f | while read -r gradle_file; do
-            sed -i -E "s/(applicationId\s*=?\s*[\"'])[^\"']+([\"'])/\1${NEW_PKG}\2/g" "$gradle_file"
-          done
-
+          find manager/app/src/main/res -name "strings.xml" -type f -exec sed -i -E "s|(<string name=\"app_name\">)[^<]+(</string>)|\1${APP_NAME}\2|g" {} +
+          find manager/app -maxdepth 2 -name "build.gradle*" -type f -exec sed -i -E "s/(applicationId\s*=?\s*[\"'])[^\"']+([\"'])/\1${NEW_PKG}\2/g" {} +
           find manager/app/src/main/res -type f -name "*.xml" -exec sed -i -E "s/\bBakaSU\b/${APP_NAME}/g; s/\bReSukiSU\b/${APP_NAME}/g" {} +
 
           echo "Rebrand selesai: app_name=${APP_NAME}, applicationId=${NEW_PKG}"
@@ -200,10 +182,7 @@ if changed:
           REF_NAME: ${{ inputs.ref }}
           BUILD_TYPE: ${{ inputs.build_type }}
         run: |
-          CAPTION="ZexSU Manager APK siap sign MT Manager
-Ref: ${REF_NAME}
-Type: ${BUILD_TYPE}
-Run: ${{ github.run_number }}"
+          CAPTION=$(printf "ZexSU Manager APK siap sign MT Manager\nRef: %s\nType: %s\nRun: %s" "${REF_NAME}" "${BUILD_TYPE}" "${{ github.run_number }}")
           RESP=$(curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
             -F "chat_id=${TG_CHAT_ID}" \
             -F "document=@${APK_PATH}" \
