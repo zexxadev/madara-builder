@@ -88,22 +88,19 @@ jobs:
           python3 - << 'PY'
           import glob, os, re
 
-          OLD_PKG = "org.bakasu.manager"
           NEW_PKG = "org.zexsu.manager"
+          NEW_JNI = "org/zexsu/manager"
+          NEW_SYM = "Java_org_zexsu_manager_"
 
-          # 1. Deteksi package asli dari build.gradle / AndroidManifest
-          for gradle in glob.glob("manager/**/build.gradle*", recursive=True):
-              with open(gradle, "r", encoding="utf-8", errors="ignore") as f:
-                  txt = f.read()
-              m = re.search(r'(?:namespace|applicationId)\s*[= ]\s*["\']([^"\']+)["\']', txt)
-              if m:
-                  OLD_PKG = m.group(1)
-                  break
+          OLD_PKGS = [
+              "com.resukisu.resukisu",
+              "com.resukisu.manager",
+              "org.bakasu.manager",
+              "me.weishu.kernelsu",
+          ]
 
-          print(f"Rebranding package: {OLD_PKG} -> {NEW_PKG}")
-
-          # 2. Ganti package & nama aplikasi di seluruh source manager
-          exts = (".kt", ".java", ".xml", ".kts", ".gradle", ".pro", ".aidl", ".rs", ".c", ".h")
+          # Ganti package, JNI path, & nama aplikasi di seluruh file termasuk .toml & .cpp
+          exts = (".kt", ".java", ".xml", ".kts", ".gradle", ".toml", ".properties", ".pro", ".aidl", ".rs", ".c", ".cc", ".cpp", ".h", ".hpp")
           for root, _, files in os.walk("."):
               if ".git" in root:
                   continue
@@ -113,11 +110,18 @@ jobs:
                   fp = os.path.join(root, fn)
                   with open(fp, "r", encoding="utf-8", errors="ignore") as f:
                       content = f.read()
-                  new_content = content.replace(OLD_PKG, NEW_PKG)
-                  new_content = new_content.replace("BakaSU", "ZexSU").replace("Baka-SU", "ZexSU")
+                  new_content = content
+                  for old_p in OLD_PKGS:
+                      old_jni = old_p.replace(".", "/")
+                      old_sym = "Java_" + old_p.replace(".", "_") + "_"
+                      new_content = new_content.replace(old_p, NEW_PKG)
+                      new_content = new_content.replace(old_jni, NEW_JNI)
+                      new_content = new_content.replace(old_sym, NEW_SYM)
+                  new_content = re.sub(r'\b(BakaSU|Baka-SU|ReSukiSU)\b', 'ZexSU', new_content)
                   if new_content != content:
                       with open(fp, "w", encoding="utf-8") as f:
                           f.write(new_content)
+          print(f"Rebranded all packages & JNI paths -> {NEW_PKG} OK")
 
           # 3. Suntikkan aset & tema Material Glass ke res/values/
           res_values = "manager/app/src/main/res/values"
@@ -182,15 +186,16 @@ jobs:
         run: |
           export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/26.1.10909125"
           USERSPACE_DIR=$(find . -maxdepth 3 -name "Cargo.toml" -exec dirname {} \; | head -n 1)
-          JNI_DIR=$(find manager -type d -name "jniLibs" | head -n 1)
-          [ -z "$JNI_DIR" ] && JNI_DIR="manager/app/src/main/jniLibs"
-          mkdir -p "$JNI_DIR/arm64-v8a"
-
           cd "$USERSPACE_DIR"
           RUSTUP_TOOLCHAIN=nightly cargo ndk -t arm64-v8a --platform 26 build --release
           KSUD_BIN=$(find target -path "*/aarch64-linux-android/release/*" -maxdepth 3 \( -name "libksud.so" -o -name "ksud" \) | head -n 1)
           [ -f "$KSUD_BIN" ] || { echo "ERROR: Binary ksud tidak ditemukan!"; ls -la target/aarch64-linux-android/release/; exit 1; }
-          cp "$KSUD_BIN" "$GITHUB_WORKSPACE/zexsu_src/$JNI_DIR/arm64-v8a/libksud.so"
+          mkdir -p "$GITHUB_WORKSPACE/zexsu_src/manager/app/src/main/jniLibs/arm64-v8a"
+          cp "$KSUD_BIN" "$GITHUB_WORKSPACE/zexsu_src/manager/app/src/main/jniLibs/arm64-v8a/libksud.so"
+          for jdir in $(find "$GITHUB_WORKSPACE/zexsu_src/manager" -type d -name "jniLibs"); do
+            mkdir -p "$jdir/arm64-v8a"
+            cp "$KSUD_BIN" "$jdir/arm64-v8a/libksud.so"
+          done
 
       - name: Build Unsigned Release APK
         working-directory: zexsu_src/manager
@@ -644,7 +649,7 @@ jobs:
               orig = ctxt
               ctxt = re.sub(r'(#define\s+EXPECTED_SIZE\s+)(?:0x[0-9a-fA-F]+|\d+)', rf'\g<1>{z_size}', ctxt)
               ctxt = re.sub(r'(#define\s+EXPECTED_HASH\s+")([0-9a-fA-F]{64})(")', rf'\g<1>{z_hash}\g<3>', ctxt)
-              for old_mgr in ("me.weishu.kernelsu", "com.rifsxd.ksunext", "com.resukisu.manager", "org.bakasu.manager"):
+              for old_mgr in ("me.weishu.kernelsu", "com.rifsxd.ksunext", "com.resukisu.resukisu", "com.resukisu.manager", "org.bakasu.manager"):
                   ctxt = ctxt.replace(old_mgr, z_pkg)
               if ctxt != orig:
                   with open(cfile, "w") as f:
