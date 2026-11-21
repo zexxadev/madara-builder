@@ -1,4 +1,4 @@
-name: Build madaraKernel Blossom
+name: Build madaraRikudou Blossom
 
 on:
   workflow_dispatch:
@@ -61,7 +61,7 @@ jobs:
           restore-keys: |
             ccache-blossom-${{ matrix.variant }}-
 
-      - name: Inject Performance, OC, Touch Polling, Charging Fix & Power Tweaks
+      - name: Inject Performance, OC, Touch Polling, Storage/RAM & Charging Tweaks
         working-directory: kernel
         run: |
           python3 - << 'PY'
@@ -101,7 +101,6 @@ jobs:
               with open(tp_f, 'r', errors='ignore') as f:
                   ttxt = f.read()
               orig_t = ttxt
-              # Percepat interval polling/delay touch loop (10-16ms -> 4ms)
               ttxt = re.sub(r'\bmsleep\s*\(\s*(?:10|12|15|16)\s*\)', 'usleep_range(4000, 4500)', ttxt)
               ttxt = re.sub(r'\bmdelay\s*\(\s*(?:10|12|15|16)\s*\)', 'udelay(4000)', ttxt)
               ttxt = re.sub(r'(#define\s+(?:TPD|TOUCH|GTP|FTS|ILITEK|NT36)_[A-Z0-9_]*(?:POLL|INTERVAL|DELAY|RATE)[A-Z0-9_]*\s+)(?:10|12|15|16)\b', r'\g<1>4', ttxt)
@@ -148,16 +147,25 @@ jobs:
               patch_file(cpu_f, r'\b1500000\b', '1800000', 'Little CPU OC 1.8GHz')
               patch_file(cpu_f, r'\b2001000\b', '2300000', 'Big CPU OC 2.3GHz')
 
-          # 4. Bake VM, Block I/O (none) & Power Efficiency Defaults langsung ke C Source
-          patch_file('mm/vmscan.c', r'\bint\s+vm_swappiness\s*=\s*60\s*;', 'int vm_swappiness = 120;', 'vm_swappiness=120')
+          # 4. Storage Read & RAM Management (MGLRU TTL, Watermark, eMMC CRC Off, Block I/O)
+          patch_file('mm/vmscan.c', r'\bint\s+vm_swappiness\s*=\s*60\s*;', 'int vm_swappiness = 130;', 'vm_swappiness=130')
+          patch_file('mm/vmscan.c', r'\bint\s+sysctl_vfs_cache_pressure\s*=\s*100\s*;', 'int sysctl_vfs_cache_pressure = 85;', 'vfs_cache_pressure=85')
+          patch_file('mm/vmscan.c', r'static\s+unsigned\s+long\s+lru_gen_min_ttl\s+__read_mostly\s*;', 'static unsigned long lru_gen_min_ttl __read_mostly = HZ;', 'MGLRU min_ttl=1000ms')
           patch_file('mm/swap.c', r'\bint\s+page_cluster\s*=\s*3\s*;', 'int page_cluster = 0;', 'page-cluster=0')
           patch_file('mm/page-writeback.c', r'\bint\s+vm_dirty_ratio\s*=\s*20\s*;', 'int vm_dirty_ratio = 15;', 'dirty_ratio=15')
           patch_file('mm/page-writeback.c', r'\bint\s+dirty_background_ratio\s*=\s*10\s*;', 'int dirty_background_ratio = 5;', 'dirty_background_ratio=5')
+          patch_file('mm/page_alloc.c', r'\bint\s+watermark_scale_factor\s*=\s*10\s*;', 'int watermark_scale_factor = 30;', 'watermark_scale_factor=30')
+          patch_file('mm/page_alloc.c', r'\bint\s+watermark_boost_factor\s*=\s*15000\s*;', 'int watermark_boost_factor = 0;', 'watermark_boost_factor=0')
+          patch_file('mm/page_alloc.c', r'\bint\s+user_min_free_kbytes\s*=\s*-1\s*;', 'int user_min_free_kbytes = 16384;', 'user_min_free_kbytes=16384')
+          patch_file('mm/vmstat.c', r'\bint\s+sysctl_stat_interval\s*=\s*HZ\s*;', 'int sysctl_stat_interval = (10 * HZ);', 'sysctl_stat_interval=10*HZ')
+          patch_file('include/linux/mm.h', r'#define\s+VM_MAX_READAHEAD\s+\d+', '#define VM_MAX_READAHEAD 128', 'VM_MAX_READAHEAD=128')
+          patch_file('block/elevator.c', r'elevator_get\(\s*q\s*,\s*"mq-deadline"\s*,\s*false\s*\)', 'NULL', 'blk-mq default none')
+
+          for mmc_f in glob.glob('drivers/mmc/core/*.c'):
+              patch_file(mmc_f, r'\bbool\s+use_spi_crc\s*=\s*(?:1|true)\s*;', 'bool use_spi_crc = 0;', 'eMMC SPI CRC off')
+
           patch_file('kernel/power/suspend.c', r'\bbool\s+sync_on_suspend\s*=\s*true\s*;', 'bool sync_on_suspend = false;', 'sync_on_suspend=false')
           patch_file('kernel/sched/fair.c', r'\bunsigned\s+int\s+sysctl_timer_migration\s*=\s*1\s*;', 'unsigned int sysctl_timer_migration = 0;', 'timer_migration=0')
-          patch_file('block/elevator.c', r'elevator_get\(\s*q\s*,\s*"mq-deadline"\s*,\s*false\s*\)', 'NULL', 'blk-mq default none')
-          patch_file('mm/vmscan.c', r'\bint\s+sysctl_vfs_cache_pressure\s*=\s*100\s*;', 'int sysctl_vfs_cache_pressure = 80;', 'vfs_cache_pressure=80')
-          patch_file('mm/page_alloc.c', r'\bint\s+watermark_scale_factor\s*=\s*10\s*;', 'int watermark_scale_factor = 30;', 'watermark_scale_factor=30')
           patch_file('kernel/workqueue.c', r'\bbool\s+wq_power_efficient\s*=\s*IS_ENABLED\(CONFIG_WQ_POWER_EFFICIENT_DEFAULT\)\s*;', 'bool wq_power_efficient = true;', 'wq_power_efficient=true')
 
           # 4b. Geser ambang thermal throttle awal +5C (batas shutdown >=95C tetap utuh)
@@ -308,7 +316,7 @@ jobs:
                   print(f"Patched madara_disable_ppm_policies in {ppm_f} OK")
           PY
 
-          # 7. Buat driver madara_tweaks.c (Interactive CPU + Power Efficiency + Tweak Lock)
+          # 7. Buat driver madara_tweaks.c (Fast Storage Read + RAM + CPU + Power Lock)
           cat << 'EOF' > drivers/misc/madara_tweaks.c
           #include <linux/module.h>
           #include <linux/kernel.h>
@@ -345,17 +353,24 @@ jobs:
 
           static void madara_apply_tweaks(struct work_struct *work)
           {
-          	vm_swappiness = 120;
+          	vm_swappiness = 130;
           	tcp_set_default_congestion_control(&init_net, "bbr");
 
           	if (madara_disable_ppm_policies)
           		madara_disable_ppm_policies();
 
-          	/* Block I/O & VM */
+          	/* Storage Read & Low-Latency Block Queue */
           	madara_write_sysfs("/sys/block/mmcblk0/queue/scheduler", "none");
           	madara_write_sysfs("/sys/block/mmcblk0/queue/read_ahead_kb", "128");
-          	madara_write_sysfs("/proc/sys/vm/vfs_cache_pressure", "80");
+          	madara_write_sysfs("/sys/block/mmcblk0/queue/iostats", "0");
+          	madara_write_sysfs("/sys/block/mmcblk0/queue/add_random", "0");
+          	madara_write_sysfs("/sys/block/mmcblk0/queue/rq_affinity", "2");
+
+          	/* RAM Management (2GB + ZRAM LZ4) */
+          	madara_write_sysfs("/proc/sys/vm/vfs_cache_pressure", "85");
           	madara_write_sysfs("/proc/sys/vm/watermark_scale_factor", "30");
+          	madara_write_sysfs("/proc/sys/vm/watermark_boost_factor", "0");
+          	madara_write_sysfs("/proc/sys/vm/min_free_kbytes", "16384");
 
           	/* Interactive CPU Boost + Fast Down-Ramp untuk Efisiensi Daya */
           	madara_write_sysfs("/sys/devices/system/cpu/cpufreq/schedutil/up_rate_limit_us", "500");
@@ -553,7 +568,7 @@ jobs:
             -e ZRAM_DEDUP \
             -e SWAP_VMA_READAHEAD \
             -e CRYPTO_LZ4 \
-            --set-str LOCALVERSION "-madaraKernel" \
+            --set-str LOCALVERSION "-madaraRikudou" \
             -d LOCALVERSION_AUTO
 
           make -j$(nproc --all) O=out ARCH=arm64 olddefconfig
@@ -597,7 +612,7 @@ jobs:
 
           ### AnyKernel setup
           properties() { '
-          kernel.string=madaraKernel 4.19.325 (${{ matrix.variant }}) by @zexxadev
+          kernel.string=madaraRikudou 4.19.325 (${{ matrix.variant }}) by @zexxadev
           do.devicecheck=1
           do.modules=0
           do.systemless=1
@@ -627,7 +642,7 @@ jobs:
           EOF
 
           rm -rf .git README.md
-          ZIP_NAME="madaraKernel-blossom-${{ matrix.variant }}-$(date +%Y%m%d).zip"
+          ZIP_NAME="madaraRikudou-blossom-${{ matrix.variant }}-$(date +%Y%m%d).zip"
           zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" .
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
@@ -639,8 +654,8 @@ jobs:
         with:
           repository: zexxadev/niigo_kernel_xiaomi_blossom
           token: ${{ secrets.RELEASE_TOKEN }}
-          tag_name: madara-b${{ github.run_number }}
-          name: madaraKernel Blossom (Build #${{ github.run_number }})
+          tag_name: madaraRikudou-b${{ github.run_number }}
+          name: madaraRikudou Blossom (Build #${{ github.run_number }})
           body: |
             ### Changelogs
             ${{ env.CHANGELOG }}
@@ -672,7 +687,7 @@ jobs:
           md5_hash = hashlib.md5(file_data).hexdigest()
           clog = html.escape(os.environ.get("CHANGELOG", "• Maintenance build"))
           caption = (
-              f"<b>madaraKernel ({os.environ['VARIANT']})</b>\n"
+              f"<b>madaraRikudou ({os.environ['VARIANT']})</b>\n"
               f"MD5: <code>{md5_hash}</code>\n\n"
               f"<b>Changelog:</b>\n{clog}"
           )
