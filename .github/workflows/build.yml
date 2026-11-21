@@ -178,11 +178,11 @@ jobs:
               with open(chg_f, 'r', errors='ignore') as f:
                   ctxt = f.read()
               orig_c = ctxt
-              ctxt = re.sub(r'(#define\s+AC_CHARGER_INPUT_CURRENT\s+)\d+', r'\g<1>2100000', ctxt)
+              ctxt = re.sub(r'(#define\s+AC_CHARGER_INPUT_CURRENT\s+)\d+', r'\g<1>2400000', ctxt)
               ctxt = re.sub(r'(#define\s+AC_CHARGER_CURRENT\s+)\d+', r'\g<1>2050000', ctxt)
               ctxt = re.sub(r'(#define\s+NON_STD_AC_CHARGER_CURRENT\s+)\d+', r'\g<1>1800000', ctxt)
               ctxt = re.sub(r'(#define\s+CHARGING_HOST_CHARGER_CURRENT\s+)\d+', r'\g<1>1800000', ctxt)
-              ctxt = re.sub(r'(->ac_charger_input_current\s*=\s*)\d+;', r'\g<1>2100000;', ctxt)
+              ctxt = re.sub(r'(->ac_charger_input_current\s*=\s*)\d+;', r'\g<1>2400000;', ctxt)
               ctxt = re.sub(r'(->ac_charger_current\s*=\s*)\d+;', r'\g<1>2050000;', ctxt)
               ctxt = re.sub(r'(->non_std_ac_charger_current\s*=\s*)\d+;', r'\g<1>1800000;', ctxt)
               if ctxt != orig_c:
@@ -194,7 +194,7 @@ jobs:
               with open(dts_f, 'r', errors='ignore') as f:
                   dtxt = f.read()
               orig_d = dtxt
-              dtxt = re.sub(r'(ac_charger_input_current\s*=\s*<)\d+(>;)', r'\g<1>2100000\g<2>', dtxt)
+              dtxt = re.sub(r'(ac_charger_input_current\s*=\s*<)\d+(>;)', r'\g<1>2400000\g<2>', dtxt)
               dtxt = re.sub(r'(ac_charger_current\s*=\s*<)\d+(>;)', r'\g<1>2050000\g<2>', dtxt)
               dtxt = re.sub(r'(non_std_ac_charger_current\s*=\s*<)\d+(>;)', r'\g<1>1800000\g<2>', dtxt)
               dtxt = re.sub(r'(charging_host_charger_current\s*=\s*<)\d+(>;)', r'\g<1>1800000\g<2>', dtxt)
