@@ -61,7 +61,7 @@ jobs:
           restore-keys: |
             ccache-blossom-${{ matrix.variant }}-
 
-      - name: Inject Performance, OC, Charging Fix & VM Defaults
+      - name: Inject Performance, OC, Touch Polling, Charging Fix & Power Tweaks
         working-directory: kernel
         run: |
           python3 - << 'PY'
@@ -80,7 +80,7 @@ jobs:
               except FileNotFoundError:
                   pass
 
-          # 1. Scheduler: Matikan GENTLE_FAIR_SLEEPERS & aktifkan NEXT_BUDDY
+          # 1. Scheduler: Optimasi Interactive Tasks (GENTLE_FAIR_SLEEPERS=0, NEXT_BUDDY=1)
           feat_file = 'kernel/sched/features.h'
           with open(feat_file, 'r') as f:
               feat = f.read()
@@ -93,6 +93,24 @@ jobs:
           with open(feat_file, 'w') as f:
               f.write(feat)
           print(f"Patched Sched Features (GENTLE={n1}, NEXT_BUDDY={n2}) OK")
+
+          # 1b. Touch Polling Rate Boost (~200-240Hz aktif, tetap suspend penuh saat layar mati)
+          patch_file('drivers/input/evdev.c', r'#define\s+EVDEV_BUF_PACKETS\s+8\b', '#define EVDEV_BUF_PACKETS 32', 'evdev touch buffer 32')
+          touch_patched = 0
+          for tp_f in glob.glob('drivers/input/touchscreen/**/*.[ch]', recursive=True):
+              with open(tp_f, 'r', errors='ignore') as f:
+                  ttxt = f.read()
+              orig_t = ttxt
+              # Percepat interval polling/delay touch loop (10-16ms -> 4ms)
+              ttxt = re.sub(r'\bmsleep\s*\(\s*(?:10|12|15|16)\s*\)', 'usleep_range(4000, 4500)', ttxt)
+              ttxt = re.sub(r'\bmdelay\s*\(\s*(?:10|12|15|16)\s*\)', 'udelay(4000)', ttxt)
+              ttxt = re.sub(r'(#define\s+(?:TPD|TOUCH|GTP|FTS|ILITEK|NT36)_[A-Z0-9_]*(?:POLL|INTERVAL|DELAY|RATE)[A-Z0-9_]*\s+)(?:10|12|15|16)\b', r'\g<1>4', ttxt)
+              ttxt = re.sub(r'(#define\s+(?:TPD|TOUCH|GTP|FTS|ILITEK|NT36)_[A-Z0-9_]*(?:POLL|INTERVAL|DELAY|RATE)[A-Z0-9_]*\s+)(?:10000|12000|16000|16666)\b', r'\g<1>4000', ttxt)
+              if ttxt != orig_t:
+                  with open(tp_f, 'w') as f:
+                      f.write(ttxt)
+                  touch_patched += 1
+          print(f"Patched Touch Polling Rate Boost in {touch_patched} files OK")
 
           # 2. GPU Overclock PowerVR GE8320 -> 920 MHz
           for pattern in ['drivers/misc/mediatek/**/*.[ch]', 'drivers/gpu/**/*.[ch]']:
@@ -130,7 +148,7 @@ jobs:
               patch_file(cpu_f, r'\b1500000\b', '1800000', 'Little CPU OC 1.8GHz')
               patch_file(cpu_f, r'\b2001000\b', '2300000', 'Big CPU OC 2.3GHz')
 
-          # 4. Bake VM, Block I/O (none) & Power Defaults langsung ke C Source
+          # 4. Bake VM, Block I/O (none) & Power Efficiency Defaults langsung ke C Source
           patch_file('mm/vmscan.c', r'\bint\s+vm_swappiness\s*=\s*60\s*;', 'int vm_swappiness = 120;', 'vm_swappiness=120')
           patch_file('mm/swap.c', r'\bint\s+page_cluster\s*=\s*3\s*;', 'int page_cluster = 0;', 'page-cluster=0')
           patch_file('mm/page-writeback.c', r'\bint\s+vm_dirty_ratio\s*=\s*20\s*;', 'int vm_dirty_ratio = 15;', 'dirty_ratio=15')
@@ -140,6 +158,7 @@ jobs:
           patch_file('block/elevator.c', r'elevator_get\(\s*q\s*,\s*"mq-deadline"\s*,\s*false\s*\)', 'NULL', 'blk-mq default none')
           patch_file('mm/vmscan.c', r'\bint\s+sysctl_vfs_cache_pressure\s*=\s*100\s*;', 'int sysctl_vfs_cache_pressure = 80;', 'vfs_cache_pressure=80')
           patch_file('mm/page_alloc.c', r'\bint\s+watermark_scale_factor\s*=\s*10\s*;', 'int watermark_scale_factor = 30;', 'watermark_scale_factor=30')
+          patch_file('kernel/workqueue.c', r'\bbool\s+wq_power_efficient\s*=\s*IS_ENABLED\(CONFIG_WQ_POWER_EFFICIENT_DEFAULT\)\s*;', 'bool wq_power_efficient = true;', 'wq_power_efficient=true')
 
           # 4b. Geser ambang thermal throttle awal +5C (batas shutdown >=95C tetap utuh)
           for th_f in glob.glob('drivers/misc/mediatek/thermal/**/*.[ch]', recursive=True):
@@ -195,7 +214,6 @@ jobs:
                   ctxt = f.read()
               orig_c = ctxt
 
-              # Naikkan limit arus AC, Non-Std AC, dan Apple 2.1A (chr_type 5)
               ctxt = re.sub(r'(#define\s+AC_CHARGER_INPUT_CURRENT\s+)\d+', r'\g<1>2400000', ctxt)
               ctxt = re.sub(r'(#define\s+AC_CHARGER_CURRENT\s+)\d+', r'\g<1>2050000', ctxt)
               ctxt = re.sub(r'(#define\s+NON_STD_AC_CHARGER_CURRENT\s+)\d+', r'\g<1>2000000', ctxt)
@@ -209,7 +227,6 @@ jobs:
               ctxt = re.sub(r'(->charging_host_charger_current\s*=\s*)\d+;', r'\g<1>2000000;', ctxt)
               ctxt = re.sub(r'(->apple_2_1a_charger_current\s*=\s*)\d+;', r'\g<1>2050000;', ctxt)
 
-              # Longgarkan SW JEITA CC & CV (35C-45C tetap 2050mA & CV 4.40V agar tidak CV taper dini)
               ctxt = re.sub(r'(#define\s+BATTERY_CV\s+)\d+', r'\g<1>4400000', ctxt)
               ctxt = re.sub(r'(#define\s+JEITA_TEMP_T1_TO_T2_CC\s+)\d+', r'\g<1>2050000', ctxt)
               ctxt = re.sub(r'(#define\s+JEITA_TEMP_T2_TO_T3_CC\s+)\d+', r'\g<1>2050000', ctxt)
@@ -291,7 +308,7 @@ jobs:
                   print(f"Patched madara_disable_ppm_policies in {ppm_f} OK")
           PY
 
-          # 7. Buat driver madara_tweaks.c (Direct Kernel API + set_fs KERNEL_DS)
+          # 7. Buat driver madara_tweaks.c (Interactive CPU + Power Efficiency + Tweak Lock)
           cat << 'EOF' > drivers/misc/madara_tweaks.c
           #include <linux/module.h>
           #include <linux/kernel.h>
@@ -334,14 +351,22 @@ jobs:
           	if (madara_disable_ppm_policies)
           		madara_disable_ppm_policies();
 
+          	/* Block I/O & VM */
           	madara_write_sysfs("/sys/block/mmcblk0/queue/scheduler", "none");
           	madara_write_sysfs("/sys/block/mmcblk0/queue/read_ahead_kb", "128");
-          	madara_write_sysfs("/sys/devices/system/cpu/cpufreq/schedutil/up_rate_limit_us", "500");
-          	madara_write_sysfs("/sys/devices/system/cpu/cpufreq/schedutil/down_rate_limit_us", "2000");
-          	madara_write_sysfs("/sys/devices/system/cpu/cpufreq/schedutil/hispeed_freq", "2300000");
-          	madara_write_sysfs("/sys/devices/system/cpu/cpufreq/schedutil/hispeed_load", "75");
           	madara_write_sysfs("/proc/sys/vm/vfs_cache_pressure", "80");
           	madara_write_sysfs("/proc/sys/vm/watermark_scale_factor", "30");
+
+          	/* Interactive CPU Boost + Fast Down-Ramp untuk Efisiensi Daya */
+          	madara_write_sysfs("/sys/devices/system/cpu/cpufreq/schedutil/up_rate_limit_us", "500");
+          	madara_write_sysfs("/sys/devices/system/cpu/cpufreq/schedutil/down_rate_limit_us", "2500");
+          	madara_write_sysfs("/sys/devices/system/cpu/cpufreq/schedutil/hispeed_freq", "2300000");
+          	madara_write_sysfs("/sys/devices/system/cpu/cpufreq/schedutil/hispeed_load", "78");
+
+          	/* Power Efficient Workqueues */
+          	madara_write_sysfs("/sys/module/workqueue/parameters/power_efficient", "Y");
+
+          	/* Network */
           	madara_write_sysfs("/proc/sys/net/ipv4/tcp_low_latency", "1");
           	madara_write_sysfs("/proc/sys/net/ipv4/tcp_fastopen", "3");
 
@@ -519,6 +544,10 @@ jobs:
             -e DEFAULT_FQ \
             --set-str DEFAULT_NET_SCH "fq" \
             -e WQ_POWER_EFFICIENT_DEFAULT \
+            -e NO_HZ_IDLE \
+            -e CPU_IDLE \
+            -e PM_WAKELOCKS_GC \
+            -e JUMP_LABEL \
             -e LRU_GEN \
             -e LRU_GEN_ENABLED \
             -e ZRAM_DEDUP \
