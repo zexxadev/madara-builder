@@ -125,7 +125,7 @@ jobs:
                           f.write(d_new)
                       print(f"Patched GPU DTS OPP 920MHz in {dts} OK")
 
-          # 3. CPU Overclock Little Cluster (1.5 GHz -> 1.8 GHz)
+          # 3. CPU Overclock Little Cluster (1.5 GHz -> 1.8 GHz) & Big Cluster (2.3 GHz)
           for cpu_f in glob.glob('drivers/misc/mediatek/base/power/cpufreq_v1/**/*.[ch]', recursive=True):
               patch_file(cpu_f, r'\b1500000\b', '1800000', 'Little CPU OC 1.8GHz')
               patch_file(cpu_f, r'\b2001000\b', '2300000', 'Big CPU OC 2.3GHz')
@@ -189,22 +189,47 @@ jobs:
                       f.write(w_new)
                   print("Patched Deep Sleep Wakelock Blocker OK")
 
-          # 5b. Fix Slow Charging (Samakan limit 2100mA AC & 1800mA Non-Std AC)
-          for chg_f in glob.glob('drivers/power/supply/mediatek/charger/*.[ch]', recursive=True):
+          # 5b. Fix Slow Charging (AC, Non-Std AC, Apple 2.1A, SW JEITA CC & CV 4.4V)
+          for chg_f in glob.glob('drivers/power/supply/mediatek/charger/**/*.[ch]', recursive=True):
               with open(chg_f, 'r', errors='ignore') as f:
                   ctxt = f.read()
               orig_c = ctxt
+
+              # Naikkan limit arus AC, Non-Std AC, dan Apple 2.1A (chr_type 5)
               ctxt = re.sub(r'(#define\s+AC_CHARGER_INPUT_CURRENT\s+)\d+', r'\g<1>2400000', ctxt)
               ctxt = re.sub(r'(#define\s+AC_CHARGER_CURRENT\s+)\d+', r'\g<1>2050000', ctxt)
-              ctxt = re.sub(r'(#define\s+NON_STD_AC_CHARGER_CURRENT\s+)\d+', r'\g<1>1800000', ctxt)
-              ctxt = re.sub(r'(#define\s+CHARGING_HOST_CHARGER_CURRENT\s+)\d+', r'\g<1>1800000', ctxt)
+              ctxt = re.sub(r'(#define\s+NON_STD_AC_CHARGER_CURRENT\s+)\d+', r'\g<1>2000000', ctxt)
+              ctxt = re.sub(r'(#define\s+CHARGING_HOST_CHARGER_CURRENT\s+)\d+', r'\g<1>2000000', ctxt)
+              ctxt = re.sub(r'(#define\s+APPLE_2_1A_CHARGER_CURRENT\s+)\d+', r'\g<1>2050000', ctxt)
+              ctxt = re.sub(r'(#define\s+USB_CHARGER_CURRENT\s+)\d+', r'\g<1>1000000', ctxt)
+
               ctxt = re.sub(r'(->ac_charger_input_current\s*=\s*)\d+;', r'\g<1>2400000;', ctxt)
               ctxt = re.sub(r'(->ac_charger_current\s*=\s*)\d+;', r'\g<1>2050000;', ctxt)
-              ctxt = re.sub(r'(->non_std_ac_charger_current\s*=\s*)\d+;', r'\g<1>1800000;', ctxt)
+              ctxt = re.sub(r'(->non_std_ac_charger_current\s*=\s*)\d+;', r'\g<1>2000000;', ctxt)
+              ctxt = re.sub(r'(->charging_host_charger_current\s*=\s*)\d+;', r'\g<1>2000000;', ctxt)
+              ctxt = re.sub(r'(->apple_2_1a_charger_current\s*=\s*)\d+;', r'\g<1>2050000;', ctxt)
+
+              # Longgarkan SW JEITA CC & CV (35C-45C tetap 2050mA & CV 4.40V agar tidak CV taper dini)
+              ctxt = re.sub(r'(#define\s+BATTERY_CV\s+)\d+', r'\g<1>4400000', ctxt)
+              ctxt = re.sub(r'(#define\s+JEITA_TEMP_T1_TO_T2_CC\s+)\d+', r'\g<1>2050000', ctxt)
+              ctxt = re.sub(r'(#define\s+JEITA_TEMP_T2_TO_T3_CC\s+)\d+', r'\g<1>2050000', ctxt)
+              ctxt = re.sub(r'(#define\s+JEITA_TEMP_T3_TO_T4_CC\s+)\d+', r'\g<1>1500000', ctxt)
+              ctxt = re.sub(r'(#define\s+JEITA_TEMP_T1_TO_T2_CV\s+)\d+', r'\g<1>4400000', ctxt)
+              ctxt = re.sub(r'(#define\s+JEITA_TEMP_T2_TO_T3_CV\s+)\d+', r'\g<1>4400000', ctxt)
+              ctxt = re.sub(r'(#define\s+JEITA_TEMP_T3_TO_T4_CV\s+)\d+', r'\g<1>4250000', ctxt)
+
+              ctxt = re.sub(r'(->battery_cv\s*=\s*)\d+;', r'\g<1>4400000;', ctxt)
+              ctxt = re.sub(r'(->jeita_temp_t1_to_t2_cc\s*=\s*)\d+;', r'\g<1>2050000;', ctxt)
+              ctxt = re.sub(r'(->jeita_temp_t2_to_t3_cc\s*=\s*)\d+;', r'\g<1>2050000;', ctxt)
+              ctxt = re.sub(r'(->jeita_temp_t3_to_t4_cc\s*=\s*)\d+;', r'\g<1>1500000;', ctxt)
+              ctxt = re.sub(r'(->jeita_temp_t1_to_t2_cv\s*=\s*)\d+;', r'\g<1>4400000;', ctxt)
+              ctxt = re.sub(r'(->jeita_temp_t2_to_t3_cv\s*=\s*)\d+;', r'\g<1>4400000;', ctxt)
+              ctxt = re.sub(r'(->jeita_temp_t3_to_t4_cv\s*=\s*)\d+;', r'\g<1>4250000;', ctxt)
+
               if ctxt != orig_c:
                   with open(chg_f, 'w') as f:
                       f.write(ctxt)
-                  print(f"Patched MTK charger current in {chg_f} OK")
+                  print(f"Patched MTK charger & JEITA CC/CV in {chg_f} OK")
 
           for dts_f in glob.glob('arch/arm64/boot/dts/mediatek/*.dts*', recursive=True):
               with open(dts_f, 'r', errors='ignore') as f:
@@ -212,12 +237,20 @@ jobs:
               orig_d = dtxt
               dtxt = re.sub(r'(ac_charger_input_current\s*=\s*<)\d+(>;)', r'\g<1>2400000\g<2>', dtxt)
               dtxt = re.sub(r'(ac_charger_current\s*=\s*<)\d+(>;)', r'\g<1>2050000\g<2>', dtxt)
-              dtxt = re.sub(r'(non_std_ac_charger_current\s*=\s*<)\d+(>;)', r'\g<1>1800000\g<2>', dtxt)
-              dtxt = re.sub(r'(charging_host_charger_current\s*=\s*<)\d+(>;)', r'\g<1>1800000\g<2>', dtxt)
+              dtxt = re.sub(r'(non_std_ac_charger_current\s*=\s*<)\d+(>;)', r'\g<1>2000000\g<2>', dtxt)
+              dtxt = re.sub(r'(charging_host_charger_current\s*=\s*<)\d+(>;)', r'\g<1>2000000\g<2>', dtxt)
+              dtxt = re.sub(r'(apple_2_1a_charger_current\s*=\s*<)\d+(>;)', r'\g<1>2050000\g<2>', dtxt)
+              dtxt = re.sub(r'(battery_cv\s*=\s*<)\d+(>;)', r'\g<1>4400000\g<2>', dtxt)
+              dtxt = re.sub(r'(jeita_temp_t1_to_t2_cc\s*=\s*<)\d+(>;)', r'\g<1>2050000\g<2>', dtxt)
+              dtxt = re.sub(r'(jeita_temp_t2_to_t3_cc\s*=\s*<)\d+(>;)', r'\g<1>2050000\g<2>', dtxt)
+              dtxt = re.sub(r'(jeita_temp_t3_to_t4_cc\s*=\s*<)\d+(>;)', r'\g<1>1500000\g<2>', dtxt)
+              dtxt = re.sub(r'(jeita_temp_t1_to_t2_cv\s*=\s*<)\d+(>;)', r'\g<1>4400000\g<2>', dtxt)
+              dtxt = re.sub(r'(jeita_temp_t2_to_t3_cv\s*=\s*<)\d+(>;)', r'\g<1>4400000\g<2>', dtxt)
+              dtxt = re.sub(r'(jeita_temp_t3_to_t4_cv\s*=\s*<)\d+(>;)', r'\g<1>4250000\g<2>', dtxt)
               if dtxt != orig_d:
                   with open(dts_f, 'w') as f:
                       f.write(dtxt)
-                  print(f"Patched DTS charger limit in {dts_f} OK")
+                  print(f"Patched DTS charger & JEITA CC/CV limit in {dts_f} OK")
 
           # 6. Suntikkan helper madara_disable_ppm_policies() & lock policy 1-3 di mtk_ppm_interface.c
           for ppm_f in glob.glob('drivers/misc/mediatek/**/ppm_v3/src/mtk_ppm_interface.c', recursive=True):
@@ -361,7 +394,6 @@ jobs:
             curl -LSs \
               "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" \
               | bash -s "$KSU_REF"
-
 
             git clone --depth=1 \
               https://github.com/fabiannabil1/susfs-4.19-nongki.git \
