@@ -138,7 +138,23 @@ jobs:
           patch_file('kernel/power/suspend.c', r'\bbool\s+sync_on_suspend\s*=\s*true\s*;', 'bool sync_on_suspend = false;', 'sync_on_suspend=false')
           patch_file('kernel/sched/fair.c', r'\bunsigned\s+int\s+sysctl_timer_migration\s*=\s*1\s*;', 'unsigned int sysctl_timer_migration = 0;', 'timer_migration=0')
           patch_file('block/elevator.c', r'elevator_get\(\s*q\s*,\s*"mq-deadline"\s*,\s*false\s*\)', 'NULL', 'blk-mq default none')
-          patch_file('drivers/mmc/core/core.c', r'\bbool\s+use_spi_crc\s*=\s*true\s*;', 'bool use_spi_crc = false;', 'use_spi_crc=false')
+          patch_file('mm/vmscan.c', r'\bint\s+sysctl_vfs_cache_pressure\s*=\s*100\s*;', 'int sysctl_vfs_cache_pressure = 80;', 'vfs_cache_pressure=80')
+          patch_file('mm/page_alloc.c', r'\bint\s+watermark_scale_factor\s*=\s*10\s*;', 'int watermark_scale_factor = 30;', 'watermark_scale_factor=30')
+
+          # 4b. Geser ambang thermal throttle awal +5C (batas shutdown >=95C tetap utuh)
+          for th_f in glob.glob('drivers/misc/mediatek/thermal/**/*.[ch]', recursive=True):
+              with open(th_f, 'r', errors='ignore') as f:
+                  ttxt = f.read()
+              def bump_trip(m):
+                  val = int(m.group(2))
+                  if 45000 <= val <= 85000:
+                      return f"{m.group(1)}{val + 5000}"
+                  return m.group(0)
+              nttxt, nt = re.subn(r'(\btrip_temp\s*=\s*|\bTHERMAL_TRIP_TEMP\s+)(\d{5})\b', bump_trip, ttxt)
+              if nt and nttxt != ttxt:
+                  with open(th_f, 'w') as f:
+                      f.write(nttxt)
+                  print(f"Shifted thermal trip +5C in {th_f} ({nt}x) OK")
 
           # 5. Deep Sleep Wakelock Blocker
           wakeup_file = 'drivers/base/power/wakeup.c'
@@ -291,6 +307,10 @@ jobs:
           	madara_write_sysfs("/sys/devices/system/cpu/cpufreq/schedutil/down_rate_limit_us", "2000");
           	madara_write_sysfs("/sys/devices/system/cpu/cpufreq/schedutil/hispeed_freq", "2300000");
           	madara_write_sysfs("/sys/devices/system/cpu/cpufreq/schedutil/hispeed_load", "75");
+          	madara_write_sysfs("/proc/sys/vm/vfs_cache_pressure", "80");
+          	madara_write_sysfs("/proc/sys/vm/watermark_scale_factor", "30");
+          	madara_write_sysfs("/proc/sys/net/ipv4/tcp_low_latency", "1");
+          	madara_write_sysfs("/proc/sys/net/ipv4/tcp_fastopen", "3");
 
           	madara_pass++;
           	if (madara_pass == 1)
@@ -542,6 +562,7 @@ jobs:
           set -o pipefail
           make -j$(nproc --all) O=out \
             ARCH=arm64 \
+            KCFLAGS="-march=armv8-a+crc+crypto -mtune=cortex-a53" \
             LOCALVERSION="" \
             CC="ccache clang" \
             LD=ld.lld \
