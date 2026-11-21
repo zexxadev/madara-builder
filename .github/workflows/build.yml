@@ -355,10 +355,6 @@ jobs:
 
       - name: Setup Variant (${{ matrix.variant }})
         working-directory: kernel
-        env:
-          ZEXSU_KEYSTORE_B64: ${{ secrets.ZEXSU_KEYSTORE_B64 }}
-          ZEXSU_KS_PASS: ${{ secrets.ZEXSU_KS_PASS }}
-          ZEXSU_KS_ALIAS: ${{ secrets.ZEXSU_KS_ALIAS }}
         run: |
           if [ "${{ matrix.variant }}" == "RSKSU-SusFS" ]; then
             KSU_REF="d5e9e025b8b49155f8014684d64c91742b465f65"
@@ -366,59 +362,6 @@ jobs:
               "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" \
               | bash -s "$KSU_REF"
 
-            # Sinkronkan package & cert ZexSU dari Keystore Secret (jika ada)
-            python3 - << 'PY'
-          import base64, glob, os, re, subprocess
-
-          ks_b64 = os.environ.get("ZEXSU_KEYSTORE_B64", "").strip()
-          ks_pass = os.environ.get("ZEXSU_KS_PASS", "").strip()
-          ks_alias = os.environ.get("ZEXSU_KS_ALIAS", "").strip()
-          z_pkg = "org.zexsu.manager"
-
-          if ks_b64 and ks_pass and ks_alias:
-              with open("/tmp/ks.jks", "wb") as f:
-                  f.write(base64.b64decode(ks_b64))
-              out = subprocess.check_output(
-                  ["keytool", "-list", "-v", "-keystore", "/tmp/ks.jks", "-storepass", ks_pass, "-alias", ks_alias],
-                  text=True
-              )
-              z_hash = re.search(r"SHA256:\s*([0-9A-Fa-f:]+)", out).group(1).replace(":", "").lower()
-              p1 = subprocess.run(
-                  ["openssl", "pkcs12", "-in", "/tmp/ks.jks", "-clcerts", "-nokeys", "-passin", f"pass:{ks_pass}"],
-                  capture_output=True, check=True
-              )
-              p2 = subprocess.run(
-                  ["openssl", "x509", "-outform", "DER"],
-                  input=p1.stdout, capture_output=True, check=True
-              )
-              z_size = str(len(p2.stdout))
-              os.remove("/tmp/ks.jks")
-
-              print(f"Applying ZexSU Cert -> PKG={z_pkg} | SIZE={z_size} | HASH={z_hash}")
-
-              for kb in glob.glob("drivers/kernelsu/**/Kbuild", recursive=True) + glob.glob("drivers/kernelsu/**/Makefile", recursive=True):
-                  with open(kb, "r") as f:
-                      ktxt = f.read()
-                  new_ktxt = re.sub(r'(-D[A-Z0-9_]*EXPECTED[A-Z0-9_]*SIZE=)(?:0x[0-9a-fA-F]+|\d+)', rf'\g<1>{z_size}', ktxt)
-                  new_ktxt = re.sub(r'(-D[A-Z0-9_]*EXPECTED[A-Z0-9_]*HASH=\\?")[0-9a-fA-F]{64}(\\?")', rf'\g<1>{z_hash}\g<2>', new_ktxt)
-                  new_ktxt = re.sub(r'(-D[A-Z0-9_]*MANAGER_PACKAGE=\\?")[^\\"]+(\\?")', rf'\g<1>{z_pkg}\g<2>', new_ktxt)
-                  if new_ktxt != ktxt:
-                      with open(kb, "w") as f:
-                          f.write(new_ktxt)
-
-              for cfile in glob.glob("drivers/kernelsu/**/*.[ch]", recursive=True):
-                  with open(cfile, "r", errors="ignore") as f:
-                      ctxt = f.read()
-                  orig = ctxt
-                  ctxt = re.sub(r'(#define\s+[A-Z0-9_]*EXPECTED[A-Z0-9_]*SIZE\s+)(?:0x[0-9a-fA-F]+|\d+)', rf'\g<1>{z_size}', ctxt)
-                  ctxt = re.sub(r'(#define\s+[A-Z0-9_]*EXPECTED[A-Z0-9_]*HASH\s+")([0-9a-fA-F]{64})(")', rf'\g<1>{z_hash}\g<3>', ctxt)
-                  ctxt = re.sub(r'(["\'])[0-9a-fA-F]{64}\1', rf'\g<1>{z_hash}\g<1>', ctxt)
-                  for old_mgr in ("me.weishu.kernelsu", "com.rifsxd.ksunext", "com.resukisu.resukisu", "com.resukisu.manager", "org.bakasu.manager"):
-                      ctxt = ctxt.replace(old_mgr, z_pkg)
-                  if ctxt != orig:
-                      with open(cfile, "w") as f:
-                          f.write(ctxt)
-          PY
 
             git clone --depth=1 \
               https://github.com/fabiannabil1/susfs-4.19-nongki.git \
