@@ -61,12 +61,14 @@ jobs:
           restore-keys: |
             ccache-blossom-${{ matrix.variant }}-
 
-      - name: Inject Performance, OC, Touch Polling, Storage/RAM & Charging Tweaks
+      - name: Inject Performance, PELT 16ms, OC, Touch Polling, Storage/RAM & Charging Tweaks
         working-directory: kernel
         run: |
           python3 - << 'PY'
           import glob
+          import os
           import re
+          import subprocess
 
           def patch_file(path, pattern, repl, desc):
               try:
@@ -80,7 +82,7 @@ jobs:
               except FileNotFoundError:
                   pass
 
-          # 1. Scheduler: Optimasi Interactive Tasks (GENTLE_FAIR_SLEEPERS=0, NEXT_BUDDY=1)
+          # 1. Scheduler: Optimasi Interactive Tasks & PELT 16ms Half-Life
           feat_file = 'kernel/sched/features.h'
           with open(feat_file, 'r') as f:
               feat = f.read()
@@ -93,6 +95,22 @@ jobs:
           with open(feat_file, 'w') as f:
               f.write(feat)
           print(f"Patched Sched Features (GENTLE={n1}, NEXT_BUDDY={n2}) OK")
+
+          pelt_gen = 'Documentation/scheduler/sched-pelt.c'
+          pelt_hdr = 'kernel/sched/sched-pelt.h'
+          if os.path.exists(pelt_gen) and os.path.exists(pelt_hdr):
+              with open(pelt_gen, 'r') as f:
+                  ptxt = f.read()
+              ptxt_new, np = re.subn(r'(#define\s+HALFLIFE\s+)32\b', r'\g<1>16', ptxt)
+              if np:
+                  with open('/tmp/sched-pelt16.c', 'w') as f:
+                      f.write(ptxt_new)
+                  subprocess.run(['gcc', '/tmp/sched-pelt16.c', '-lm', '-o', '/tmp/sched-pelt16'], check=True)
+                  hdr_out = subprocess.check_output(['/tmp/sched-pelt16'], text=True)
+                  if 'LOAD_AVG_PERIOD 16' in hdr_out:
+                      with open(pelt_hdr, 'w') as f:
+                          f.write(hdr_out)
+                      print("Patched PELT 16ms Half-Life (sched-pelt.h) OK")
 
           # 1b. Touch Polling Rate Boost (~200-240Hz aktif, tetap suspend penuh saat layar mati)
           patch_file('drivers/input/evdev.c', r'#define\s+EVDEV_BUF_PACKETS\s+8\b', '#define EVDEV_BUF_PACKETS 32', 'evdev touch buffer 32')
@@ -563,11 +581,24 @@ jobs:
             -e CPU_IDLE \
             -e PM_WAKELOCKS_GC \
             -e JUMP_LABEL \
+            -e UCLAMP_TASK \
+            -e UCLAMP_TASK_GROUP \
             -e LRU_GEN \
             -e LRU_GEN_ENABLED \
             -e ZRAM_DEDUP \
             -e SWAP_VMA_READAHEAD \
             -e CRYPTO_LZ4 \
+            -d SLUB_DEBUG \
+            -d SLUB_DEBUG_ON \
+            -d FTRACE \
+            -d FUNCTION_TRACER \
+            -d DYNAMIC_FTRACE \
+            -d STACK_TRACER \
+            -d SCHED_DEBUG \
+            -d SCHEDSTATS \
+            -d KALLSYMS_ALL \
+            -d DEBUG_PREEMPT \
+            -d DEBUG_LIST \
             --set-str LOCALVERSION "-madaraRikudou" \
             -d LOCALVERSION_AUTO
 
