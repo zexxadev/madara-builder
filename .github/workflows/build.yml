@@ -332,6 +332,19 @@ jobs:
                   with open(ppm_f, 'w') as f:
                       f.write(ptxt)
                   print(f"Patched madara_disable_ppm_policies in {ppm_f} OK")
+
+          # Fix missing linux/gfp.h in MTK performance utility.c
+          util_c = 'drivers/misc/mediatek/performance/base/utility.c'
+          try:
+              with open(util_c, 'r') as f:
+                  utxt = f.read()
+              if '#include <linux/gfp.h>' not in utxt:
+                  utxt = '#include <linux/gfp.h>\n' + utxt
+                  with open(util_c, 'w') as f:
+                      f.write(utxt)
+                  print('Patched linux/gfp.h in utility.c OK')
+          except FileNotFoundError:
+              pass
           PY
 
           # 7. Buat driver madara_tweaks.c (Fast Storage Read + RAM + CPU + Power Lock)
