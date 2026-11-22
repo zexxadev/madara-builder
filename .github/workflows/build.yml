@@ -345,6 +345,28 @@ jobs:
                   print('Patched linux/gfp.h in utility.c OK')
           except FileNotFoundError:
               pass
+
+          # Ensure read_ahead_kb sysfs attribute is writable (0644 instead of 0444)
+          blk_sysfs = 'block/blk-sysfs.c'
+          try:
+              with open(blk_sysfs, 'r') as f:
+                  btxt = f.read()
+              btxt_new, n = re.subn(
+                  r'QUEUE_RO_ENTRY\(\s*queue_read_ahead\s*,\s*"read_ahead_kb"\s*\)',
+                  '__ATTR(read_ahead_kb, 0644, queue_read_ahead_show, queue_read_ahead_store)',
+                  btxt
+              )
+              if n == 0 and 'queue_read_ahead' in btxt:
+                  btxt_new = re.sub(r'(\bqueue_read_ahead_entry\.attr\.mode\s*=\s*)0444', r'\g<1>0644', btxt)
+                  if btxt_new == btxt:
+                      btxt_new = re.sub(r'(QUEUE_RO_ENTRY\([^)]*read_ahead_kb[^)]*\))', lambda m: m.group(0).replace('0444', '0644'), btxt)
+              if btxt_new != btxt:
+                  with open(blk_sysfs, 'w') as f:
+                      f.write(btxt_new)
+                  print('Patched read_ahead_kb sysfs mode to 0644 OK')
+          except FileNotFoundError:
+              pass
+
           PY
 
           # 7. Buat driver madara_tweaks.c (Fast Storage Read + RAM + CPU + Power Lock)
@@ -392,23 +414,7 @@ jobs:
 
           	/* Storage Read & Low-Latency Block Queue */
           	madara_write_sysfs("/sys/block/mmcblk0/queue/scheduler", "none");
-          	# Ensure read_ahead_kb sysfs attribute is writable (0644 instead of 0444)
-          blk_sysfs = 'block/blk-sysfs.c'
-          try:
-              with open(blk_sysfs, 'r') as f:
-                  btxt = f.read()
-              import re
-              btxt_new, n = re.subn(r'(QUEUE_RO_ENTRY\(queue_read_ahead,\s*"read_ahead_kb"\))', r'__ATTR(read_ahead_kb, 0644, queue_read_ahead_show, queue_read_ahead_store)', btxt)
-              if n == 0:
-                  btxt_new, n = re.subn(r'(&queue_read_ahead_entry\.attr,)', lambda m: m.group(0), btxt)
-                  btxt_new = btxt_new.replace('0444', '0644') if 'read_ahead_kb' in btxt_new else btxt_new
-              if btxt_new != btxt:
-                  with open(blk_sysfs, 'w') as f:
-                      f.write(btxt_new)
-                  print('Patched read_ahead_kb sysfs mode to 0644 OK')
-          except FileNotFoundError:
-              pass
-          madara_write_sysfs("/sys/block/mmcblk0/queue/read_ahead_kb", "128");
+          	madara_write_sysfs("/sys/block/mmcblk0/queue/read_ahead_kb", "128");
           	madara_write_sysfs("/sys/block/mmcblk0/queue/iostats", "0");
           	madara_write_sysfs("/sys/block/mmcblk0/queue/add_random", "0");
           	madara_write_sysfs("/sys/block/mmcblk0/queue/rq_affinity", "2");
@@ -425,7 +431,11 @@ jobs:
           	madara_write_sysfs("/sys/devices/system/cpu/cpufreq/schedutil/hispeed_freq", "2300000");
           	madara_write_sysfs("/sys/devices/system/cpu/cpufreq/schedutil/hispeed_load", "78");
 
-          	/* Power Efficient Workqueues */
+          	/* Charging & JEITA Runtime Enforcement */
+	madara_write_sysfs("/sys/devices/platform/charger/sw_jeita", "0");
+	madara_write_sysfs("/sys/devices/platform/charger/power_supply/mtk-master-charger/input_current_limit", "2400000");
+
+	/* Power Efficient Workqueues */
           	madara_write_sysfs("/sys/module/workqueue/parameters/power_efficient", "Y");
 
           	/* Network */
