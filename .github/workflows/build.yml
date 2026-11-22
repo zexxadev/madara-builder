@@ -547,6 +547,7 @@ jobs:
           CONFIG_KSU_SUSFS_SUS_MAP=y
           # CONFIG_KPROBES is not set
           EOF
+            sed -i 's/--dirty//g' KernelSU/kernel/Kbuild KernelSU/kernel/Makefile 2>/dev/null || true
           fi
 
       - name: Build Kernel
@@ -596,7 +597,7 @@ jobs:
             -d STACK_TRACER \
             -d SCHED_DEBUG \
             -d SCHEDSTATS \
-            -d KALLSYMS_ALL \
+            -e KALLSYMS_ALL \
             -d DEBUG_PREEMPT \
             -d DEBUG_LIST \
             --set-str LOCALVERSION "-madaraRikudou" \
