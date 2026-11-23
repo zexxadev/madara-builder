@@ -276,6 +276,23 @@ jobs:
                       f.write(ctxt)
                   print(f"Patched MTK charger & JEITA CC/CV in {chg_f} OK")
 
+          # 1c. Optimasi prioritas thread Wi-Fi MediaTek gen4m (hif_thread & rx_thread)
+          gl_init = 'drivers/misc/mediatek/connectivity/wlan/core/gen4m/os/linux/gl_init.c'
+          if os.path.exists(gl_init):
+              with open(gl_init, 'r', errors='ignore') as f:
+                  wtxt = f.read()
+              orig_w = wtxt
+              wtxt, n_hif = re.subn(
+                  r'((?:static\s+)?int\s+(?:hif_thread|rx_thread)\s*\([^)]*\)\s*\{(?:(?!^\}).)*?\n)([ \t]+)(while\s*\()',
+                  lambda m: m.group(1) + m.group(2) + 'set_user_nice(current, -10);\n' + m.group(2) + m.group(3),
+                  wtxt,
+                  flags=re.S | re.M
+              )
+              if wtxt != orig_w:
+                  with open(gl_init, 'w') as f:
+                      f.write(wtxt)
+                  print(f"Patched gen4m Wi-Fi thread priority ({n_hif}x) OK")
+
           for dts_f in glob.glob('arch/arm64/boot/dts/mediatek/*.dts*', recursive=True):
               with open(dts_f, 'r', errors='ignore') as f:
                   stxt = f.read()
@@ -503,6 +520,17 @@ jobs:
           	/* Network */
           	madara_write_sysfs("/proc/sys/net/ipv4/tcp_low_latency", "1");
           	madara_write_sysfs("/proc/sys/net/ipv4/tcp_fastopen", "3");
+          	madara_write_sysfs("/proc/sys/net/ipv4/tcp_slow_start_after_idle", "0");
+          	madara_write_sysfs("/proc/sys/net/ipv4/tcp_notsent_lowat", "16384");
+          	madara_write_sysfs("/proc/sys/net/ipv4/tcp_mtu_probing", "1");
+          	madara_write_sysfs("/proc/sys/net/ipv4/tcp_ecn", "1");
+          	madara_write_sysfs("/proc/sys/net/ipv4/tcp_retries2", "8");
+          	madara_write_sysfs("/proc/sys/net/core/rmem_max", "2097152");
+          	madara_write_sysfs("/proc/sys/net/core/wmem_max", "2097152");
+          	madara_write_sysfs("/proc/sys/net/ipv4/tcp_rmem", "4096 87380 2097152");
+          	madara_write_sysfs("/proc/sys/net/ipv4/tcp_wmem", "4096 65536 2097152");
+          	madara_write_sysfs("/proc/sys/net/core/netdev_max_backlog", "2500");
+          	madara_write_sysfs("/proc/sys/net/core/netdev_budget", "600");
 
           	madara_pass++;
           	if (madara_pass == 1)
@@ -701,6 +729,7 @@ jobs:
             -d DEFAULT_RENO \
             --set-str DEFAULT_TCP_CONG "bbr" \
             -e NET_SCH_FQ \
+            -e NET_SCH_FQ_CODEL \
             -e NET_SCH_DEFAULT \
             -e DEFAULT_FQ \
             --set-str DEFAULT_NET_SCH "fq" \
