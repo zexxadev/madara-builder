@@ -1,4 +1,4 @@
-name: Build madaraRikudou Blossom
+name: Build madaraRikudouLTS Blossom
 
 on:
   workflow_dispatch:
@@ -756,7 +756,7 @@ jobs:
             -e KALLSYMS_ALL \
             -d DEBUG_PREEMPT \
             -d DEBUG_LIST \
-            --set-str LOCALVERSION "-madaraRikudou-v1.5" \
+            --set-str LOCALVERSION "-madaraRikudouLTS" \
             -d LOCALVERSION_AUTO
 
           make -j$(nproc --all) O=out ARCH=arm64 olddefconfig
@@ -820,7 +820,7 @@ jobs:
 
           ### AnyKernel setup
           properties() { '
-          kernel.string=madaraRikudou 4.19.325 (${{ matrix.variant }}) by @zexxadev
+          kernel.string=madaraRikudouLTS 4.19.325 (${{ matrix.variant }}) by @zexxadev
           do.devicecheck=1
           do.modules=0
           do.systemless=1
@@ -850,7 +850,7 @@ jobs:
           EOF
 
           rm -rf .git README.md
-          ZIP_NAME="madaraRikudou-blossom-${{ matrix.variant }}-$(date +%Y%m%d).zip"
+          ZIP_NAME="madaraRikudouLTS-blossom-${{ matrix.variant }}-$(date +%Y%m%d).zip"
           zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" .
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
@@ -862,8 +862,8 @@ jobs:
         with:
           repository: zexxadev/niigo_kernel_xiaomi_blossom
           token: ${{ secrets.RELEASE_TOKEN }}
-          tag_name: madaraRikudou-b${{ github.run_number }}
-          name: madaraRikudou Blossom (Build #${{ github.run_number }})
+          tag_name: madaraRikudouLTS-b${{ github.run_number }}
+          name: madaraRikudouLTS Blossom (Build #${{ github.run_number }})
           body: |
             ### Changelogs
             ${{ env.CHANGELOG }}
@@ -896,7 +896,7 @@ jobs:
           md5_hash = hashlib.md5(file_data).hexdigest()
           clog = html.escape(os.environ.get("CHANGELOG", "• Maintenance build"))
           caption = (
-              f"<b>madaraRikudou ({os.environ['VARIANT']})</b>\n"
+              f"<b>madaraRikudouLTS ({os.environ['VARIANT']})</b>\n"
               f"Simple LMK: <code>{os.environ.get('SLMK_STATUS', 'UNKNOWN')}</code>\n"
               f"MD5: <code>{md5_hash}</code>\n\n"
               f"<b>Changelog:</b>\n{clog}"
