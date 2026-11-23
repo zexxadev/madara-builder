@@ -173,6 +173,23 @@ jobs:
           ls -lh "$OUT_APK"
           echo "apk_path=$OUT_APK" >> "$GITHUB_OUTPUT"
 
+
+      - name: Auto-Sign ZexSU APK
+        env:
+          ZEXSU_KEYSTORE_B64: ${{ secrets.ZEXSU_KEYSTORE_B64 }}
+          ZEXSU_KEY_ALIAS: ${{ secrets.ZEXSU_KEY_ALIAS }}
+          ZEXSU_KEY_PASS: ${{ secrets.ZEXSU_KEY_PASS }}
+        run: |
+          if [ -n "$ZEXSU_KEYSTORE_B64" ]; then
+            echo "$ZEXSU_KEYSTORE_B64" | base64 -d > /tmp/zexsu.jks
+            APKSIGNER=$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name apksigner | sort -V | tail -n 1)
+            for apk in $(find . -maxdepth 4 -name "*.apk" ! -name "*unsigned*" ! -name "*-signed.apk"); do
+              "$APKSIGNER" sign --ks /tmp/zexsu.jks --ks-key-alias "$ZEXSU_KEY_ALIAS" --ks-pass "pass:$ZEXSU_KEY_PASS" --key-pass "pass:$ZEXSU_KEY_PASS" --out "${apk%.apk}-signed.apk" "$apk"
+              mv "${apk%.apk}-signed.apk" "$apk"
+              echo "Signed: $apk"
+            done
+            rm -f /tmp/zexsu.jks
+          fi
       - name: Send APK to Telegram
         env:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
