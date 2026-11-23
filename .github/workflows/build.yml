@@ -346,6 +346,10 @@ jobs:
           except FileNotFoundError:
               pass
 
+          # Izinkan ANDROID_SIMPLE_LMK aktif bersamaan dengan CONFIG_MEMCG & CONFIG_PSI
+          patch_file('drivers/android/Kconfig', r'depends on\s+!MEMCG\s*&&\s*!PSI', 'depends on y', 'Simple LMK allow MEMCG & PSI')
+          patch_file('drivers/android/Kconfig', r'depends on\s+!PSI', 'depends on y', 'Simple LMK allow PSI')
+
           # Ensure read_ahead_kb sysfs attribute is writable (0644 instead of 0444)
           blk_sysfs = 'block/blk-sysfs.c'
           try:
@@ -669,6 +673,7 @@ jobs:
             -d LOCALVERSION_AUTO
 
           make -j$(nproc --all) O=out ARCH=arm64 olddefconfig
+          grep -E '^CONFIG_ANDROID_SIMPLE_LMK|^CONFIG_PSI=' out/.config
 
           if [ "${{ matrix.variant }}" == "RSKSU-SusFS" ]; then
             grep -q "^CONFIG_KSU=y" out/.config || exit 1
