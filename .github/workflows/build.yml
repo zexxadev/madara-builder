@@ -586,7 +586,7 @@ jobs:
           CONFIG_KSU_SUSFS_SUS_MAP=y
           # CONFIG_KPROBES is not set
           EOF
-            sed -i 's/--dirty//g' KernelSU/kernel/Kbuild KernelSU/kernel/Makefile 2>/dev/null || true
+            sed -i 's/--dirty//g; s/-dirty//g' KernelSU/kernel/Kbuild KernelSU/kernel/Makefile drivers/kernelsu/Kbuild drivers/kernelsu/Makefile 2>/dev/null || true
           fi
 
       - name: Build Kernel
