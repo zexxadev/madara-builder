@@ -347,23 +347,33 @@ jobs:
               pass
 
           # Izinkan ANDROID_SIMPLE_LMK aktif bersamaan dengan CONFIG_MEMCG & CONFIG_PSI
-       kconfig_path = 'drivers/android/Kconfig'
-       if os.path.exists(kconfig_path):
-           with open(kconfig_path, 'r') as f:
-               ktxt = f.read()
-           def unlock_slmk(m):
-               blk = m.group(0)
-               blk = re.sub(r'!MEMCG\s*&&\s*!PSI|!PSI\s*&&\s*!MEMCG|!MEMCG|!PSI', 'y', blk)
-               blk = re.sub(r'\by\s*&&\s*y\b', 'y', blk)
-               return blk
-           ktxt_new, nk = re.subn(r'config ANDROID_SIMPLE_LMK\b.*?(?=\nconfig |\nendmenu|\Z)', unlock_slmk, ktxt, flags=re.S)
-           if nk:
-               with open(kconfig_path, 'w') as f:
-                   f.write(ktxt_new)
-               print("Patched ANDROID_SIMPLE_LMK Kconfig dependencies OK")
-           m_blk = re.search(r'config ANDROID_SIMPLE_LMK\b.*?(?=\nconfig |\nendmenu|\Z)', ktxt_new, flags=re.S)
-           if m_blk:
-               print("=== Kconfig ANDROID_SIMPLE_LMK ===\n" + m_blk.group(0).strip() + "\n==================================")
+          kconfig_path = 'drivers/android/Kconfig'
+          if os.path.exists(kconfig_path):
+              with open(kconfig_path, 'r') as f:
+                  ktxt = f.read()
+              def unlock_slmk(m):
+                  blk = m.group(0)
+                  blk = re.sub(r'!MEMCG\s*&&\s*!PSI|!PSI\s*&&\s*!MEMCG|!MEMCG|!PSI', 'y', blk)
+                  blk = re.sub(r'\by\s*&&\s*y\b', 'y', blk)
+                  return blk
+              ktxt_new, nk = re.subn(r'config ANDROID_SIMPLE_LMK\b.*?(?=\nconfig |\nendmenu|\Z)', unlock_slmk, ktxt, flags=re.S)
+              if nk:
+                  with open(kconfig_path, 'w') as f:
+                      f.write(ktxt_new)
+                  print("Patched ANDROID_SIMPLE_LMK Kconfig dependencies OK")
+              m_blk = re.search(r'config ANDROID_SIMPLE_LMK\b.*?(?=\nconfig |\nendmenu|\Z)', ktxt_new, flags=re.S)
+              if m_blk:
+                  print("=== Kconfig ANDROID_SIMPLE_LMK ===\n" + m_blk.group(0).strip() + "\n==================================")
+
+          android_mk = 'drivers/android/Makefile'
+          if os.path.exists(android_mk):
+              with open(android_mk, 'r') as f:
+                  amk = f.read()
+              if 'simple_lmk.o' not in amk:
+                  amk += '\nobj-$(CONFIG_ANDROID_SIMPLE_LMK) += simple_lmk.o\n'
+                  with open(android_mk, 'w') as f:
+                      f.write(amk)
+                  print("Added simple_lmk.o to drivers/android/Makefile OK")
 
           # Ensure read_ahead_kb sysfs attribute is writable (0644 instead of 0444)
           blk_sysfs = 'block/blk-sysfs.c'
@@ -806,6 +816,7 @@ jobs:
           ZIP_NAME: ${{ env.ZIP_NAME }}
           VARIANT: ${{ matrix.variant }}
           CHANGELOG: ${{ env.CHANGELOG }}
+          SLMK_STATUS: ${{ env.SLMK_STATUS }}
         run: |
           python3 - << 'EOF'
           import glob, hashlib, html, os, sys, urllib.request, uuid
@@ -824,6 +835,7 @@ jobs:
           clog = html.escape(os.environ.get("CHANGELOG", "• Maintenance build"))
           caption = (
               f"<b>madaraRikudou ({os.environ['VARIANT']})</b>\n"
+              f"Simple LMK: <code>{os.environ.get('SLMK_STATUS', 'UNKNOWN')}</code>\n"
               f"MD5: <code>{md5_hash}</code>\n\n"
               f"<b>Changelog:</b>\n{clog}"
           )
