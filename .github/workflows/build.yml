@@ -166,7 +166,7 @@ jobs:
               patch_file(cpu_f, r'\b2001000\b', '2300000', 'Big CPU OC 2.3GHz')
 
           # 4. Storage Read & RAM Management (MGLRU TTL, Watermark, eMMC CRC Off, Block I/O)
-          patch_file('mm/vmscan.c', r'\bint\s+vm_swappiness\s*=\s*60\s*;', 'int vm_swappiness = 130;', 'vm_swappiness=130')
+          patch_file('mm/vmscan.c', r'\bint\s+vm_swappiness\s*=\s*60\s*;', 'int vm_swappiness = 100;', 'vm_swappiness=130')
           patch_file('mm/vmscan.c', r'\bint\s+sysctl_vfs_cache_pressure\s*=\s*100\s*;', 'int sysctl_vfs_cache_pressure = 85;', 'vfs_cache_pressure=85')
           patch_file('mm/vmscan.c', r'static\s+unsigned\s+long\s+lru_gen_min_ttl\s+__read_mostly\s*;', 'static unsigned long lru_gen_min_ttl __read_mostly = HZ;', 'MGLRU min_ttl=1000ms')
           patch_file('mm/swap.c', r'\bint\s+page_cluster\s*=\s*3\s*;', 'int page_cluster = 0;', 'page-cluster=0')
@@ -375,6 +375,26 @@ jobs:
                       f.write(amk)
                   print("Added simple_lmk.o to drivers/android/Makefile OK")
 
+          slmk_c = 'drivers/android/simple_lmk.c'
+          if os.path.exists(slmk_c):
+              with open(slmk_c, 'r') as f:
+                  stxt = f.read()
+              # Batasi kill hanya untuk proses background/cached (adj >= 750), lindungi foreground, IME & launcher
+              stxt, n_adj = re.subn(r'\bif\s*\(\s*adj\s*<\s*0\s*\|\|', 'if (adj < 750 ||', stxt, count=1)
+              # Tambahkan cooldown 1500ms di scan_and_kill() agar ZRAM/MGLRU sempat bekerja sebelum kill beruntun
+              stxt, n_cd = re.subn(
+                  r'(static\s+void\s+scan_and_kill\s*\(\s*void\s*\)\s*\{\n)',
+                  r'\1\tstatic unsigned long last_reclaim;\n'
+                  r'\tif (last_reclaim && time_before(jiffies, last_reclaim + msecs_to_jiffies(1500)))\n'
+                  r'\t\treturn;\n'
+                  r'\tlast_reclaim = jiffies;\n\n',
+                  stxt,
+                  count=1
+              )
+              with open(slmk_c, 'w') as f:
+                  f.write(stxt)
+              print(f"Patched simple_lmk.c (min_adj>=750: {n_adj}x, cooldown_1500ms: {n_cd}x) OK")
+
           # Ensure read_ahead_kb sysfs attribute is writable (0644 instead of 0444)
           blk_sysfs = 'block/blk-sysfs.c'
           try:
@@ -435,7 +455,7 @@ jobs:
 
           static void madara_apply_tweaks(struct work_struct *work)
           {
-          	vm_swappiness = 130;
+          	vm_swappiness = 100;
           	tcp_set_default_congestion_control(&init_net, "bbr");
 
           	if (madara_disable_ppm_policies)
@@ -679,8 +699,8 @@ jobs:
             -e UCLAMP_TASK \
             -e UCLAMP_TASK_GROUP \
             -e ANDROID_SIMPLE_LMK \
-            --set-val ANDROID_SIMPLE_LMK_MINFREE 20 \
-            --set-val ANDROID_SIMPLE_LMK_TIMEOUT_MSEC 600 \
+            --set-val ANDROID_SIMPLE_LMK_MINFREE 12 \
+            --set-val ANDROID_SIMPLE_LMK_TIMEOUT_MSEC 1000 \
             -d ANDROID_LOW_MEMORY_KILLER \
             -e LRU_GEN \
             -e LRU_GEN_ENABLED \
@@ -739,7 +759,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           [ -f out/drivers/android/simple_lmk.o ] || { echo 'ERROR: out/drivers/android/simple_lmk.o tidak terkompilasi!'; exit 1; }
           if grep -q '^CONFIG_ANDROID_SIMPLE_LMK=y' out/.config && [ -f out/drivers/android/simple_lmk.o ]; then
-            echo 'SLMK_STATUS=ACTIVE (minfree=20MB, timeout=600ms)' >> "$GITHUB_ENV"
+            echo 'SLMK_STATUS=ACTIVE (minfree=12MB, timeout=1000ms, min_adj=750)' >> "$GITHUB_ENV"
           else
             echo 'SLMK_STATUS=FAILED' >> "$GITHUB_ENV"
           fi
