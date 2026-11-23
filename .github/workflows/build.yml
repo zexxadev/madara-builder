@@ -119,19 +119,6 @@ jobs:
               with open(fts_core, 'r') as f:
                   ftxt = f.read()
               orig_f = ftxt
-              if 'uapi/linux/sched/types.h' not in ftxt:
-                  ftxt = ftxt.replace('#include "focaltech_core.h"', '#include "focaltech_core.h"\n#include <uapi/linux/sched/types.h>', 1)
-              ftxt, n_irq = re.subn(
-                  r'(static\s+irqreturn_t\s+fts_irq_handler\s*\(\s*int\s+irq\s*,\s*void\s*\*\s*data\s*\)\s*\{\s*)(int\s+ret\s*=\s*0;\n)',
-                  r'\1static bool rt_boosted;\n\t\2'
-                  r'\tif (unlikely(!rt_boosted)) {\n'
-                  r'\t\tstruct sched_param param = { .sched_priority = MAX_RT_PRIO - 3 };\n'
-                  r'\t\tsched_setscheduler_nocheck(current, SCHED_FIFO, &param);\n'
-                  r'\t\trt_boosted = true;\n'
-                  r'\t}\n',
-                  ftxt,
-                  count=1
-              )
               ftxt, n_spi = re.subn(
                   r'(spi->mode\s*=\s*SPI_MODE_0;)',
                   r'\1\n\tif (spi->max_speed_hz < 10000000)\n\t\tspi->max_speed_hz = 10000000;',
@@ -141,7 +128,7 @@ jobs:
               if ftxt != orig_f:
                   with open(fts_core, 'w') as f:
                       f.write(ftxt)
-                  print(f"Patched ft8006s_spi latency (IRQ SCHED_FIFO: {n_irq}x, SPI 10MHz: {n_spi}x) OK")
+                  print(f"Patched ft8006s_spi SPI 10MHz ({n_spi}x) OK")
 
           # 2. GPU Overclock PowerVR GE8320 -> 920 MHz
           for pattern in ['drivers/misc/mediatek/**/*.[ch]', 'drivers/gpu/**/*.[ch]']:
@@ -288,6 +275,16 @@ jobs:
                   with open(chg_f, 'w') as f:
                       f.write(ctxt)
                   print(f"Patched MTK charger & JEITA CC/CV in {chg_f} OK")
+
+          for dts_f in glob.glob('arch/arm64/boot/dts/mediatek/*.dts*', recursive=True):
+              with open(dts_f, 'r', errors='ignore') as f:
+                  stxt = f.read()
+              if 'spi@11013000' in stxt and 'mediatek,kthread-rt' not in stxt:
+                  stxt_new, n_rt = re.subn(r'(spi@11013000\s*\{)', r'\1\n\tmediatek,kthread-rt;', stxt, count=1)
+                  if n_rt:
+                      with open(dts_f, 'w') as f:
+                          f.write(stxt_new)
+                      print(f"Patched mediatek,kthread-rt on spi@11013000 in {dts_f} OK")
 
           for dts_f in glob.glob('arch/arm64/boot/dts/mediatek/*.dts*', recursive=True):
               with open(dts_f, 'r', errors='ignore') as f:
