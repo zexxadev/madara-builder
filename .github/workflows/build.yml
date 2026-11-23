@@ -347,8 +347,23 @@ jobs:
               pass
 
           # Izinkan ANDROID_SIMPLE_LMK aktif bersamaan dengan CONFIG_MEMCG & CONFIG_PSI
-          patch_file('drivers/android/Kconfig', r'depends on\s+!MEMCG\s*&&\s*!PSI', 'depends on y', 'Simple LMK allow MEMCG & PSI')
-          patch_file('drivers/android/Kconfig', r'depends on\s+!PSI', 'depends on y', 'Simple LMK allow PSI')
+       kconfig_path = 'drivers/android/Kconfig'
+       if os.path.exists(kconfig_path):
+           with open(kconfig_path, 'r') as f:
+               ktxt = f.read()
+           def unlock_slmk(m):
+               blk = m.group(0)
+               blk = re.sub(r'!MEMCG\s*&&\s*!PSI|!PSI\s*&&\s*!MEMCG|!MEMCG|!PSI', 'y', blk)
+               blk = re.sub(r'\by\s*&&\s*y\b', 'y', blk)
+               return blk
+           ktxt_new, nk = re.subn(r'config ANDROID_SIMPLE_LMK\b.*?(?=\nconfig |\nendmenu|\Z)', unlock_slmk, ktxt, flags=re.S)
+           if nk:
+               with open(kconfig_path, 'w') as f:
+                   f.write(ktxt_new)
+               print("Patched ANDROID_SIMPLE_LMK Kconfig dependencies OK")
+           m_blk = re.search(r'config ANDROID_SIMPLE_LMK\b.*?(?=\nconfig |\nendmenu|\Z)', ktxt_new, flags=re.S)
+           if m_blk:
+               print("=== Kconfig ANDROID_SIMPLE_LMK ===\n" + m_blk.group(0).strip() + "\n==================================")
 
           # Ensure read_ahead_kb sysfs attribute is writable (0644 instead of 0444)
           blk_sysfs = 'block/blk-sysfs.c'
@@ -673,7 +688,13 @@ jobs:
             -d LOCALVERSION_AUTO
 
           make -j$(nproc --all) O=out ARCH=arm64 olddefconfig
-          grep -E '^CONFIG_ANDROID_SIMPLE_LMK|^CONFIG_PSI=' out/.config
+          {
+            echo "### Simple LMK Build Report (${{ matrix.variant }})"
+            echo '```'
+            grep -E '^CONFIG_ANDROID_SIMPLE_LMK|^CONFIG_PSI=|^CONFIG_MEMCG=' out/.config || echo 'MISSING_SIMPLE_LMK'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          grep -q '^CONFIG_ANDROID_SIMPLE_LMK=y' out/.config || { echo 'ERROR: CONFIG_ANDROID_SIMPLE_LMK=y terhapus oleh olddefconfig!'; exit 1; }
 
           if [ "${{ matrix.variant }}" == "RSKSU-SusFS" ]; then
             grep -q "^CONFIG_KSU=y" out/.config || exit 1
@@ -699,6 +720,19 @@ jobs:
               exit 1
             }
 
+          {
+            echo '#### Compile Log (simple_lmk)'
+            echo '```'
+            grep -i 'simple_lmk' build.log || echo 'Tidak ada baris khusus simple_lmk di build.log'
+            ls -lh out/drivers/android/simple_lmk.o 2>&1 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ -f out/drivers/android/simple_lmk.o ] || { echo 'ERROR: out/drivers/android/simple_lmk.o tidak terkompilasi!'; exit 1; }
+          if grep -q '^CONFIG_ANDROID_SIMPLE_LMK=y' out/.config && [ -f out/drivers/android/simple_lmk.o ]; then
+            echo 'SLMK_STATUS=ACTIVE (minfree=20MB, timeout=600ms)' >> "$GITHUB_ENV"
+          else
+            echo 'SLMK_STATUS=FAILED' >> "$GITHUB_ENV"
+          fi
           ccache -s
 
       - name: Pack AnyKernel3
