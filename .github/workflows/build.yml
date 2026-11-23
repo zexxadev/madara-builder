@@ -172,9 +172,9 @@ jobs:
           patch_file('mm/swap.c', r'\bint\s+page_cluster\s*=\s*3\s*;', 'int page_cluster = 0;', 'page-cluster=0')
           patch_file('mm/page-writeback.c', r'\bint\s+vm_dirty_ratio\s*=\s*20\s*;', 'int vm_dirty_ratio = 15;', 'dirty_ratio=15')
           patch_file('mm/page-writeback.c', r'\bint\s+dirty_background_ratio\s*=\s*10\s*;', 'int dirty_background_ratio = 5;', 'dirty_background_ratio=5')
-          patch_file('mm/page_alloc.c', r'\bint\s+watermark_scale_factor\s*=\s*10\s*;', 'int watermark_scale_factor = 30;', 'watermark_scale_factor=30')
+          patch_file('mm/page_alloc.c', r'\bint\s+watermark_scale_factor\s*=\s*10\s*;', 'int watermark_scale_factor = 10;', 'watermark_scale_factor=10')
           patch_file('mm/page_alloc.c', r'\bint\s+watermark_boost_factor\s*=\s*15000\s*;', 'int watermark_boost_factor = 0;', 'watermark_boost_factor=0')
-          patch_file('mm/page_alloc.c', r'\bint\s+user_min_free_kbytes\s*=\s*-1\s*;', 'int user_min_free_kbytes = 16384;', 'user_min_free_kbytes=16384')
+          patch_file('mm/page_alloc.c', r'\bint\s+user_min_free_kbytes\s*=\s*-1\s*;', 'int user_min_free_kbytes = 8192;', 'user_min_free_kbytes=8192')
           patch_file('mm/vmstat.c', r'\bint\s+sysctl_stat_interval\s*=\s*HZ\s*;', 'int sysctl_stat_interval = (10 * HZ);', 'sysctl_stat_interval=10*HZ')
           patch_file('include/linux/mm.h', r'#define\s+VM_MAX_READAHEAD\s+\d+', '#define VM_MAX_READAHEAD 128', 'VM_MAX_READAHEAD=128')
           patch_file('block/elevator.c', r'elevator_get\(\s*q\s*,\s*"mq-deadline"\s*,\s*false\s*\)', 'NULL', 'blk-mq default none')
@@ -421,9 +421,9 @@ jobs:
 
           	/* RAM Management (2GB + ZRAM LZ4) */
           	madara_write_sysfs("/proc/sys/vm/vfs_cache_pressure", "85");
-          	madara_write_sysfs("/proc/sys/vm/watermark_scale_factor", "30");
+          	madara_write_sysfs("/proc/sys/vm/watermark_scale_factor", "10");
           	madara_write_sysfs("/proc/sys/vm/watermark_boost_factor", "0");
-          	madara_write_sysfs("/proc/sys/vm/min_free_kbytes", "16384");
+          	madara_write_sysfs("/proc/sys/vm/min_free_kbytes", "8192");
 
           	/* Interactive CPU Boost + Fast Down-Ramp untuk Efisiensi Daya */
           	madara_write_sysfs("/sys/devices/system/cpu/cpufreq/schedutil/up_rate_limit_us", "500");
@@ -650,8 +650,8 @@ jobs:
             -e UCLAMP_TASK \
             -e UCLAMP_TASK_GROUP \
             -e ANDROID_SIMPLE_LMK \
-            --set-val ANDROID_SIMPLE_LMK_MINFREE 64 \
-            --set-val ANDROID_SIMPLE_LMK_TIMEOUT_MSEC 200 \
+            --set-val ANDROID_SIMPLE_LMK_MINFREE 20 \
+            --set-val ANDROID_SIMPLE_LMK_TIMEOUT_MSEC 600 \
             -d ANDROID_LOW_MEMORY_KILLER \
             -e LRU_GEN \
             -e LRU_GEN_ENABLED \
