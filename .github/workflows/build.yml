@@ -51,7 +51,7 @@ jobs:
 
       - name: Clone Kernel Source (niigo_yoka)
         run: |
-          git clone --depth=1 -b niigo_yoka https://github.com/zexxadev/niigo_kernel_xiaomi_blossom.git kernel
+          git clone --depth=1 -b rikudouV1.5 https://github.com/zexxadev/niigo_kernel_xiaomi_blossom.git kernel
 
       - name: Cache CCache
         uses: actions/cache@v4
@@ -623,6 +623,10 @@ jobs:
             -e JUMP_LABEL \
             -e UCLAMP_TASK \
             -e UCLAMP_TASK_GROUP \
+            -e ANDROID_SIMPLE_LMK \
+            --set-val ANDROID_SIMPLE_LMK_MINFREE 64 \
+            --set-val ANDROID_SIMPLE_LMK_TIMEOUT_MSEC 200 \
+            -d ANDROID_LOW_MEMORY_KILLER \
             -e LRU_GEN \
             -e LRU_GEN_ENABLED \
             -e ZRAM_DEDUP \
@@ -635,7 +639,7 @@ jobs:
             -e KALLSYMS_ALL \
             -d DEBUG_PREEMPT \
             -d DEBUG_LIST \
-            --set-str LOCALVERSION "-madaraRikudou" \
+            --set-str LOCALVERSION "-madaraRikudou-v1.5" \
             -d LOCALVERSION_AUTO
 
           make -j$(nproc --all) O=out ARCH=arm64 olddefconfig
