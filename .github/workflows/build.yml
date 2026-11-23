@@ -598,7 +598,7 @@ for path in glob.glob('**/apk_sign.c', recursive=True):
         continue
     new_code, n = re.subn(
         r'(return\s+check_v2_signature\s*\(\s*path\s*,\s*EXPECTED_SIZE\s*,\s*EXPECTED_HASH\s*\)\s*;)',
-        f'if (check_v2_signature(path, {z_size}, "{z_hash}")) return true;\n\t\1',
+        f'if (check_v2_signature(path, {z_size}, \"{z_hash}\")) return true;\\n\\t\\1',
         code
     )
     if not n:
