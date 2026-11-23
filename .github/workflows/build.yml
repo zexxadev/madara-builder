@@ -589,29 +589,29 @@ jobs:
             sed -i 's/--dirty//g; s/-dirty//g' KernelSU/kernel/Kbuild KernelSU/kernel/Makefile drivers/kernelsu/Kbuild drivers/kernelsu/Makefile 2>/dev/null || true
             if [ -n "${{ secrets.ZEXSU_SIZE }}" ] && [ -n "${{ secrets.ZEXSU_HASH }}" ]; then
               python3 - "${{ secrets.ZEXSU_SIZE }}" "${{ secrets.ZEXSU_HASH }}" << 'PY'
-import glob, re, sys
-z_size, z_hash = sys.argv[1], sys.argv[2]
-for path in glob.glob('**/apk_sign.c', recursive=True):
-    with open(path, 'r', errors='ignore') as f:
-        code = f.read()
-    if z_hash in code:
-        continue
-    new_code, n = re.subn(
-        r'(return\s+check_v2_signature\s*\(\s*path\s*,\s*EXPECTED_SIZE\s*,\s*EXPECTED_HASH\s*\)\s*;)',
-        f'if (check_v2_signature(path, {z_size}, \"{z_hash}\")) return true;\\n\\t\\1',
-        code
-    )
-    if not n:
-        new_code, n = re.subn(
-            r'(check_v2_signature\s*\(\s*path\s*,\s*EXPECTED_SIZE\s*,\s*EXPECTED_HASH\s*\))',
-            f'(\1 || check_v2_signature(path, {z_size}, "{z_hash}"))',
-            code
-        )
-    if n:
-        with open(path, 'w') as f:
-            f.write(new_code)
-        print(f"Patched Dual-Signature (BakaSU + ZexSU) in {path} OK")
-PY
+          import glob, re, sys
+          z_size, z_hash = sys.argv[1], sys.argv[2]
+          for path in glob.glob('**/apk_sign.c', recursive=True):
+              with open(path, 'r', errors='ignore') as f:
+                  code = f.read()
+              if z_hash in code:
+                  continue
+              new_code, n = re.subn(
+                  r'(return\s+check_v2_signature\s*\(\s*path\s*,\s*EXPECTED_SIZE\s*,\s*EXPECTED_HASH\s*\)\s*;)',
+                  f'if (check_v2_signature(path, {z_size}, \"{z_hash}\")) return true;\\n\\t\\1',
+                  code
+              )
+              if not n:
+                  new_code, n = re.subn(
+                      r'(check_v2_signature\s*\(\s*path\s*,\s*EXPECTED_SIZE\s*,\s*EXPECTED_HASH\s*\))',
+                      f'(\1 || check_v2_signature(path, {z_size}, "{z_hash}"))',
+                      code
+                  )
+              if n:
+                  with open(path, 'w') as f:
+                      f.write(new_code)
+                  print(f"Patched Dual-Signature (BakaSU + ZexSU) in {path} OK")
+          PY
             fi
           fi
 
