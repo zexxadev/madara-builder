@@ -112,22 +112,8 @@ jobs:
                           f.write(hdr_out)
                       print("Patched PELT 16ms Half-Life (sched-pelt.h) OK")
 
-          # 1b. Touch Polling Rate Boost (~200-240Hz aktif, tetap suspend penuh saat layar mati)
+          # 1b. Tingkatkan buffer antrean event input (tanpa memotong delay reset/init IC touchscreen)
           patch_file('drivers/input/evdev.c', r'#define\s+EVDEV_BUF_PACKETS\s+8\b', '#define EVDEV_BUF_PACKETS 32', 'evdev touch buffer 32')
-          touch_patched = 0
-          for tp_f in glob.glob('drivers/input/touchscreen/**/*.[ch]', recursive=True):
-              with open(tp_f, 'r', errors='ignore') as f:
-                  ttxt = f.read()
-              orig_t = ttxt
-              ttxt = re.sub(r'\bmsleep\s*\(\s*(?:10|12|15|16)\s*\)', 'usleep_range(4000, 4500)', ttxt)
-              ttxt = re.sub(r'\bmdelay\s*\(\s*(?:10|12|15|16)\s*\)', 'udelay(4000)', ttxt)
-              ttxt = re.sub(r'(#define\s+(?:TPD|TOUCH|GTP|FTS|ILITEK|NT36)_[A-Z0-9_]*(?:POLL|INTERVAL|DELAY|RATE)[A-Z0-9_]*\s+)(?:10|12|15|16)\b', r'\g<1>4', ttxt)
-              ttxt = re.sub(r'(#define\s+(?:TPD|TOUCH|GTP|FTS|ILITEK|NT36)_[A-Z0-9_]*(?:POLL|INTERVAL|DELAY|RATE)[A-Z0-9_]*\s+)(?:10000|12000|16000|16666)\b', r'\g<1>4000', ttxt)
-              if ttxt != orig_t:
-                  with open(tp_f, 'w') as f:
-                      f.write(ttxt)
-                  touch_patched += 1
-          print(f"Patched Touch Polling Rate Boost in {touch_patched} files OK")
 
           # 2. GPU Overclock PowerVR GE8320 -> 920 MHz
           for pattern in ['drivers/misc/mediatek/**/*.[ch]', 'drivers/gpu/**/*.[ch]']:
@@ -224,10 +210,11 @@ jobs:
 
           if 'madara_is_blocked_wakelock' not in w_code:
               w_new, nw = re.subn(
-                  r'(static\s+void\s+wakeup_source_activate\s*\(\s*struct\s+wakeup_source\s*\*\s*ws\s*\)\s*\{)',
-                  blocker_fn + r'\1\n\tif (madara_is_blocked_wakelock(ws->name))\n\t\treturn;',
+                  r'(static\s+void\s+wakeup_source_activate\s*\(\s*struct\s+wakeup_source\s*\*\s*ws\s*\)\s*\{.*?\n)(\tif\s*\(\s*WARN_ONCE\s*\()',
+                  blocker_fn + r'\1\tif (madara_is_blocked_wakelock(ws->name))\n\t\treturn;\n\n\2',
                   w_code,
-                  count=1
+                  count=1,
+                  flags=re.S
               )
               if nw:
                   with open(wakeup_file, 'w') as f:
@@ -259,7 +246,7 @@ jobs:
               ctxt = re.sub(r'(#define\s+JEITA_TEMP_T3_TO_T4_CC\s+)\d+', r'\g<1>1500000', ctxt)
               ctxt = re.sub(r'(#define\s+JEITA_TEMP_T1_TO_T2_CV\s+)\d+', r'\g<1>4400000', ctxt)
               ctxt = re.sub(r'(#define\s+JEITA_TEMP_T2_TO_T3_CV\s+)\d+', r'\g<1>4400000', ctxt)
-              ctxt = re.sub(r'(#define\s+JEITA_TEMP_T3_TO_T4_CV\s+)\d+', r'\g<1>4250000', ctxt)
+              ctxt = re.sub(r'(#define\s+JEITA_TEMP_T3_TO_T4_CV\s+)\d+', r'\g<1>4200000', ctxt)
 
               ctxt = re.sub(r'(->battery_cv\s*=\s*)\d+;', r'\g<1>4400000;', ctxt)
               ctxt = re.sub(r'(->jeita_temp_t1_to_t2_cc\s*=\s*)\d+;', r'\g<1>2050000;', ctxt)
@@ -267,7 +254,7 @@ jobs:
               ctxt = re.sub(r'(->jeita_temp_t3_to_t4_cc\s*=\s*)\d+;', r'\g<1>1500000;', ctxt)
               ctxt = re.sub(r'(->jeita_temp_t1_to_t2_cv\s*=\s*)\d+;', r'\g<1>4400000;', ctxt)
               ctxt = re.sub(r'(->jeita_temp_t2_to_t3_cv\s*=\s*)\d+;', r'\g<1>4400000;', ctxt)
-              ctxt = re.sub(r'(->jeita_temp_t3_to_t4_cv\s*=\s*)\d+;', r'\g<1>4250000;', ctxt)
+              ctxt = re.sub(r'(->jeita_temp_t3_to_t4_cv\s*=\s*)\d+;', r'\g<1>4200000;', ctxt)
 
               if ctxt != orig_c:
                   with open(chg_f, 'w') as f:
@@ -278,18 +265,20 @@ jobs:
               with open(dts_f, 'r', errors='ignore') as f:
                   dtxt = f.read()
               orig_d = dtxt
-              dtxt = re.sub(r'(ac_charger_input_current\s*=\s*<)\d+(>;)', r'\g<1>2400000\g<2>', dtxt)
-              dtxt = re.sub(r'(ac_charger_current\s*=\s*<)\d+(>;)', r'\g<1>2050000\g<2>', dtxt)
-              dtxt = re.sub(r'(non_std_ac_charger_current\s*=\s*<)\d+(>;)', r'\g<1>2000000\g<2>', dtxt)
-              dtxt = re.sub(r'(charging_host_charger_current\s*=\s*<)\d+(>;)', r'\g<1>2000000\g<2>', dtxt)
-              dtxt = re.sub(r'(apple_2_1a_charger_current\s*=\s*<)\d+(>;)', r'\g<1>2050000\g<2>', dtxt)
-              dtxt = re.sub(r'(battery_cv\s*=\s*<)\d+(>;)', r'\g<1>4400000\g<2>', dtxt)
-              dtxt = re.sub(r'(jeita_temp_t1_to_t2_cc\s*=\s*<)\d+(>;)', r'\g<1>2050000\g<2>', dtxt)
-              dtxt = re.sub(r'(jeita_temp_t2_to_t3_cc\s*=\s*<)\d+(>;)', r'\g<1>2050000\g<2>', dtxt)
-              dtxt = re.sub(r'(jeita_temp_t3_to_t4_cc\s*=\s*<)\d+(>;)', r'\g<1>1500000\g<2>', dtxt)
-              dtxt = re.sub(r'(jeita_temp_t1_to_t2_cv\s*=\s*<)\d+(>;)', r'\g<1>4400000\g<2>', dtxt)
-              dtxt = re.sub(r'(jeita_temp_t2_to_t3_cv\s*=\s*<)\d+(>;)', r'\g<1>4400000\g<2>', dtxt)
-              dtxt = re.sub(r'(jeita_temp_t3_to_t4_cv\s*=\s*<)\d+(>;)', r'\g<1>4250000\g<2>', dtxt)
+              def raise_dts(pattern, floor_val, text):
+                  return re.sub(pattern, lambda m: f"{m.group(1)}{max(int(m.group(2)), floor_val)}{m.group(3)}", text)
+              dtxt = raise_dts(r'(\bac_charger_input_current\s*=\s*<)(\d+)(>;)', 2400000, dtxt)
+              dtxt = raise_dts(r'(\bac_charger_current\s*=\s*<)(\d+)(>;)', 2050000, dtxt)
+              dtxt = raise_dts(r'(\bnon_std_ac_charger_current\s*=\s*<)(\d+)(>;)', 2000000, dtxt)
+              dtxt = raise_dts(r'(\bcharging_host_charger_current\s*=\s*<)(\d+)(>;)', 2000000, dtxt)
+              dtxt = raise_dts(r'(\bapple_2_1a_charger_current\s*=\s*<)(\d+)(>;)', 2050000, dtxt)
+              dtxt = re.sub(r'(\bbattery_cv\s*=\s*<)\d+(>;)', r'\g<1>4400000\g<2>', dtxt)
+              dtxt = raise_dts(r'(\bjeita_temp_t1_to_t2_cc\s*=\s*<)(\d+)(>;)', 2050000, dtxt)
+              dtxt = raise_dts(r'(\bjeita_temp_t2_to_t3_cc\s*=\s*<)(\d+)(>;)', 2050000, dtxt)
+              dtxt = raise_dts(r'(\bjeita_temp_t3_to_t4_cc\s*=\s*<)(\d+)(>;)', 1500000, dtxt)
+              dtxt = re.sub(r'(\bjeita_temp_t1_to_t2_cv\s*=\s*<)\d+(>;)', r'\g<1>4400000\g<2>', dtxt)
+              dtxt = re.sub(r'(\bjeita_temp_t2_to_t3_cv\s*=\s*<)\d+(>;)', r'\g<1>4400000\g<2>', dtxt)
+              dtxt = re.sub(r'(\bjeita_temp_t3_to_t4_cv\s*=\s*<)\d+(>;)', r'\g<1>4200000\g<2>', dtxt)
               if dtxt != orig_d:
                   with open(dts_f, 'w') as f:
                       f.write(dtxt)
@@ -481,7 +470,6 @@ jobs:
           	madara_write_sysfs("/sys/devices/system/cpu/cpufreq/schedutil/hispeed_load", "78");
 
           	/* Charging & JEITA Runtime Enforcement */
-          	madara_write_sysfs("/sys/devices/platform/charger/sw_jeita", "0");
           	madara_write_sysfs("/sys/devices/platform/charger/power_supply/mtk-master-charger/input_current_limit", "2400000");
 
           	/* Power Efficient Workqueues */
