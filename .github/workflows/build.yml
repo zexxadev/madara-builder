@@ -571,7 +571,7 @@ jobs:
           }
           late_initcall(madara_tweaks_init);
           EOF
-          echo 'obj-y += madara_tweaks.o' >> drivers/misc/Makefile
+          grep -qF 'obj-y += madara_tweaks.o' drivers/misc/Makefile || echo 'obj-y += madara_tweaks.o' >> drivers/misc/Makefile
 
       - name: Sync Base Defconfig (Simple LMK, BBR, Localversion)
         run: |
