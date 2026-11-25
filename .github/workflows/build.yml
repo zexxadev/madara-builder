@@ -398,6 +398,7 @@ jobs:
           chat_id = os.environ["TG_CHAT_ID"]
           clog = html.escape(os.environ.get("CHANGELOG", "• Maintenance build"))
           caption = (
+              "<b>🛡️ [V1.5 STABLE | rikudouV1.5] • Run #${{ github.run_number }}</b>\n"
               f"<b>madaraRikudouLTS ({variant})</b>\n"
               f"Simple LMK: <code>{slmk}</code>\n"
               f"MD5: <code>{md5_hash}</code>\n\n"
