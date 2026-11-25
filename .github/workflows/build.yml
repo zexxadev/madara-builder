@@ -573,6 +573,25 @@ jobs:
           EOF
           echo 'obj-y += madara_tweaks.o' >> drivers/misc/Makefile
 
+      - name: Sync Base Defconfig (Simple LMK, BBR, Localversion)
+        run: |
+          cd kernel
+          DEF=arch/arm64/configs/blossom_defconfig
+          sed -i '/CONFIG_LOCALVERSION/d;/CONFIG_SIMPLE_LMK/d;/CONFIG_TCP_CONG_BBR/d;/CONFIG_NET_SCH_FQ/d;/CONFIG_DEFAULT_BIC/d;/CONFIG_DEFAULT_CUBIC/d;/CONFIG_DEFAULT_RENO/d;/CONFIG_DEFAULT_TCP_CONG/d;/CONFIG_ANDROID_LOW_MEMORY_KILLER/d' "$DEF"
+          cat << 'EOF' >> "$DEF"
+          CONFIG_LOCALVERSION="-madaraRikudouLTS"
+          CONFIG_SIMPLE_LMK=y
+          CONFIG_SIMPLE_LMK_MINFREE=12
+          CONFIG_SIMPLE_LMK_TIMEOUT_MSEC=1000
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_BBR=y
+          CONFIG_DEFAULT_BBR=y
+          CONFIG_DEFAULT_TCP_CONG="bbr"
+          CONFIG_NET_SCH_FQ=y
+          CONFIG_NET_SCH_FQ_CODEL=y
+          EOF
+          sed -i 's/^[[:space:]]*//' "$DEF"
+
       - name: Push Applied Patches to Kernel Source (rikudouV1.5)
         run: |
           cd kernel
