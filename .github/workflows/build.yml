@@ -16,22 +16,6 @@ jobs:
         variant: [Vanilla, RSKSU-SusFS]
 
     steps:
-      - name: Checkout Builder Repo (for Changelog)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 10
-          path: builder
-
-      - name: Generate Auto-Changelog
-        run: |
-          cd builder
-          LOGS=$(git log -n 5 --pretty=format:"• %s")
-          {
-            echo "CHANGELOG<<EOF"
-            echo "$LOGS"
-            echo "EOF"
-          } >> "$GITHUB_ENV"
-
       - name: Install Dependencies
         run: |
           sudo apt-get update
@@ -49,9 +33,19 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
 
-      - name: Clone Kernel Source (niigo_yoka)
+      - name: Clone Kernel Source (rikudouV1.5)
         run: |
-          git clone --depth=1 -b rikudouV1.5 https://github.com/zexxadev/niigo_kernel_xiaomi_blossom.git kernel
+          git clone --depth=10 -b rikudouV1.5 https://github.com/zexxadev/niigo_kernel_xiaomi_blossom.git kernel
+
+      - name: Generate Auto-Changelog
+        run: |
+          cd kernel
+          LOGS=$(git log -n 5 --pretty=format:"• %s")
+          {
+            echo "CHANGELOG<<EOF"
+            echo "$LOGS"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
 
       - name: Cache CCache
         uses: actions/cache@v4
@@ -77,14 +71,15 @@ jobs:
             SUSFS_PATCH="$PWD/susfs419/patches/lge-sm8250-29902cf733dc/0002-susfs-v2.3.0-4.19.patch"
             [ -f "$SUSFS_PATCH" ] || { echo "ERROR: Patch SUSFS tidak ditemukan!"; exit 1; }
 
-            python3 - "$SUSFS_PATCH" << 'PY'
+            python3 -c '
           import re, sys, subprocess
           with open(sys.argv[1], "r", encoding="utf-8", errors="replace") as f:
               patch_text = f.read()
           chunks = re.split(r"(?=^diff --git )", patch_text, flags=re.MULTILINE)
           filtered_chunks = []
           for chunk in chunks:
-              if not chunk.strip(): continue
+              if not chunk.strip():
+                  continue
               lines = chunk.splitlines(keepends=True)
               first_line = lines[0].strip()
               if re.match(r"^diff --git a/fs/proc/cmdline\.c b/fs/proc/cmdline\.c$", first_line):
@@ -103,7 +98,7 @@ jobs:
           res = subprocess.run(["patch", "-p1", "--no-backup-if-mismatch", "-F3"], input="\n".join(filtered_chunks), text=True)
           if res.returncode != 0:
               sys.exit("ERROR: Patch SUSFS gagal.")
-          PY
+          ' "$SUSFS_PATCH"
 
             if find . -name "*.rej" -not -path "./susfs419/*" | grep -q .; then
               find . -name "*.rej" -not -path "./susfs419/*" -exec head -n 80 {} +
@@ -114,39 +109,45 @@ jobs:
               echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' >> fs/Makefile
             fi
 
-            python3 - << 'EOF'
+            python3 -c '
           import os, re
-          pkg_obs = 'drivers/kernelsu/manager/pkg_observer.c'
+          pkg_obs = "drivers/kernelsu/manager/pkg_observer.c"
           if os.path.exists(pkg_obs):
-              with open(pkg_obs, 'r') as f: code = f.read()
-              code = code.replace('TWA_RESUME', 'true')
-              if '.handle_inode_event' in code:
+              with open(pkg_obs, "r") as f:
+                  code = f.read()
+              code = code.replace("TWA_RESUME", "true")
+              if ".handle_inode_event" in code:
                   wrapper = (
-                      'static int ksu_handle_event_419(struct fsnotify_group *group, struct inode *inode, '
-                      'u32 mask, const void *data, int data_type, const unsigned char *file_name, '
-                      'u32 cookie, struct fsnotify_iter_info *iter_info)\n{\n'
-                      '\tstruct qstr qname = { .name = file_name, .len = file_name ? strlen(file_name) : 0 };\n'
-                      '\treturn ksu_handle_inode_event(NULL, mask, inode, inode, file_name ? &qname : NULL, cookie);\n}\n\n'
-                      'static const struct fsnotify_ops'
+                      "static int ksu_handle_event_419(struct fsnotify_group *group, struct inode *inode, "
+                      "u32 mask, const void *data, int data_type, const unsigned char *file_name, "
+                      "u32 cookie, struct fsnotify_iter_info *iter_info)\n{\n"
+                      "\tstruct qstr qname = { .name = file_name, .len = file_name ? strlen(file_name) : 0 };\n"
+                      "\treturn ksu_handle_inode_event(NULL, mask, inode, inode, file_name ? &qname : NULL, cookie);\n}\n\n"
+                      "static const struct fsnotify_ops"
                   )
-                  code = code.replace('static const struct fsnotify_ops', wrapper, 1)
-                  code = re.sub(r'\.handle_inode_event\s*=\s*ksu_handle_inode_event', '.handle_event = ksu_handle_event_419', code)
-              with open(pkg_obs, 'w') as f: f.write(code)
+                  code = code.replace("static const struct fsnotify_ops", wrapper, 1)
+                  code = re.sub(r"\.handle_inode_event\s*=\s*ksu_handle_inode_event", ".handle_event = ksu_handle_event_419", code)
+              with open(pkg_obs, "w") as f:
+                  f.write(code)
 
-          with open('fs/namei.c', 'r') as f: namei = f.read()
-          namei_new, n = re.subn(r'\bstatic\s+(int\s+filename_lookup\s*\()', r'\1', namei)
+          with open("fs/namei.c", "r") as f:
+              namei = f.read()
+          namei_new, n = re.subn(r"\bstatic\s+(int\s+filename_lookup\s*\()", r"\1", namei)
           if n:
-              with open('fs/namei.c', 'w') as f: f.write(namei_new)
+              with open("fs/namei.c", "w") as f:
+                  f.write(namei_new)
 
-          decl = '\nextern int filename_lookup(int dfd, struct filename *name, unsigned flags, struct path *path, struct path *root);\n'
-          for target in ['fs/open.c', 'fs/stat.c']:
-              with open(target, 'r') as f: code = f.read()
-              if 'extern int filename_lookup(' not in code:
-                  includes = list(re.finditer(r'^#include\s+[<"].*?[>"]', code, flags=re.MULTILINE))
+          decl = "\nextern int filename_lookup(int dfd, struct filename *name, unsigned flags, struct path *path, struct path *root);\n"
+          for target in ["fs/open.c", "fs/stat.c"]:
+              with open(target, "r") as f:
+                  code = f.read()
+              if "extern int filename_lookup(" not in code:
+                  includes = list(re.finditer(r"^#include\s+[<\"].*?[>\"]", code, flags=re.MULTILINE))
                   last_inc_end = includes[-1].end()
                   code = code[:last_inc_end] + decl + code[last_inc_end:]
-                  with open(target, 'w') as f: f.write(code)
-          EOF
+                  with open(target, "w") as f:
+                      f.write(code)
+          '
 
             cat << 'EOF' >> arch/arm64/configs/blossom_defconfig
           CONFIG_OVERLAY_FS=y
@@ -164,32 +165,34 @@ jobs:
           CONFIG_KSU_SUSFS_SUS_MAP=y
           # CONFIG_KPROBES is not set
           EOF
+            sed -i 's/^[[:space:]]*//' arch/arm64/configs/blossom_defconfig
+
             sed -i 's/--dirty//g; s/-dirty//g' KernelSU/kernel/Kbuild KernelSU/kernel/Makefile drivers/kernelsu/Kbuild drivers/kernelsu/Makefile 2>/dev/null || true
             if [ -n "${{ secrets.ZEXSU_SIZE }}" ] && [ -n "${{ secrets.ZEXSU_HASH }}" ]; then
-              python3 - "${{ secrets.ZEXSU_SIZE }}" "${{ secrets.ZEXSU_HASH }}" << 'PY'
+              python3 -c '
           import glob, re, sys
           z_size, z_hash = sys.argv[1], sys.argv[2]
-          for path in glob.glob('**/apk_sign.c', recursive=True):
-              with open(path, 'r', errors='ignore') as f:
+          for path in glob.glob("**/apk_sign.c", recursive=True):
+              with open(path, "r", errors="ignore") as f:
                   code = f.read()
               if z_hash in code:
                   continue
               new_code, n = re.subn(
-                  r'(return\s+check_v2_signature\s*\(\s*path\s*,\s*EXPECTED_SIZE\s*,\s*EXPECTED_HASH\s*\)\s*;)',
-                  f'if (check_v2_signature(path, {z_size}, \"{z_hash}\")) return true;\\n\\t\\1',
+                  r"(return\s+check_v2_signature\s*\(\s*path\s*,\s*EXPECTED_SIZE\s*,\s*EXPECTED_HASH\s*\)\s*;)",
+                  f"if (check_v2_signature(path, {z_size}, \"{z_hash}\")) return true;\n\t\\1",
                   code
               )
               if not n:
                   new_code, n = re.subn(
-                      r'(check_v2_signature\s*\(\s*path\s*,\s*EXPECTED_SIZE\s*,\s*EXPECTED_HASH\s*\))',
-                      f'(\1 || check_v2_signature(path, {z_size}, "{z_hash}"))',
+                      r"(check_v2_signature\s*\(\s*path\s*,\s*EXPECTED_SIZE\s*,\s*EXPECTED_HASH\s*\))",
+                      f"(\\1 || check_v2_signature(path, {z_size}, \"{z_hash}\"))",
                       code
                   )
               if n:
-                  with open(path, 'w') as f:
+                  with open(path, "w") as f:
                       f.write(new_code)
                   print(f"Patched Dual-Signature (BakaSU + ZexSU) in {path} OK")
-          PY
+          ' "${{ secrets.ZEXSU_SIZE }}" "${{ secrets.ZEXSU_HASH }}"
             fi
           fi
 
@@ -336,6 +339,7 @@ jobs:
           write_boot;
           ## end install
           EOF
+          sed -i 's/^[[:space:]]*//' anykernel.sh
 
           rm -rf .git README.md
           ZIP_NAME="madaraRikudouLTS-blossom-${{ matrix.variant }}-$(date +%Y%m%d).zip"
@@ -368,7 +372,7 @@ jobs:
           CHANGELOG: ${{ env.CHANGELOG }}
           SLMK_STATUS: ${{ env.SLMK_STATUS }}
         run: |
-          python3 - << 'EOF'
+          python3 -c '
           import glob, hashlib, html, os, sys, urllib.request, uuid
 
           workspace = os.environ.get("GITHUB_WORKSPACE", ".")
@@ -384,8 +388,8 @@ jobs:
           md5_hash = hashlib.md5(file_data).hexdigest()
           clog = html.escape(os.environ.get("CHANGELOG", "• Maintenance build"))
           caption = (
-              f"<b>madaraRikudouLTS ({os.environ['VARIANT']})</b>\n"
-              f"Simple LMK: <code>{os.environ.get('SLMK_STATUS', 'UNKNOWN')}</code>\n"
+              f"<b>madaraRikudouLTS ({os.environ[\"VARIANT\"]})</b>\n"
+              f"Simple LMK: <code>{os.environ.get(\"SLMK_STATUS\", \"UNKNOWN\")}</code>\n"
               f"MD5: <code>{md5_hash}</code>\n\n"
               f"<b>Changelog:</b>\n{clog}"
           )
@@ -394,19 +398,19 @@ jobs:
           body = bytearray()
           for key, val in {"chat_id": os.environ["TG_CHAT_ID"], "caption": caption, "parse_mode": "HTML"}.items():
               body.extend(f"--{boundary}\r\n".encode())
-              body.extend(f'Content-Disposition: form-data; name="{key}"\r\n\r\n{val}\r\n'.encode())
+              body.extend(f"Content-Disposition: form-data; name=\"{key}\"\r\n\r\n{val}\r\n".encode())
 
           body.extend(f"--{boundary}\r\n".encode())
           body.extend(
-              f'Content-Disposition: form-data; name="document"; filename="{os.path.basename(file_path)}"\r\n'
+              f"Content-Disposition: form-data; name=\"document\"; filename=\"{os.path.basename(file_path)}\"\r\n"
               f"Content-Type: application/zip\r\n\r\n".encode()
           )
           body.extend(file_data)
           body.extend(f"\r\n--{boundary}--\r\n".encode())
 
-          url = f"https://api.telegram.org/bot{os.environ['TG_BOT_TOKEN']}/sendDocument"
+          url = f"https://api.telegram.org/bot{os.environ[\"TG_BOT_TOKEN\"]}/sendDocument"
           req = urllib.request.Request(url, data=bytes(body))
           req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
           with urllib.request.urlopen(req, timeout=120) as resp:
               print("Telegram upload sukses:", resp.status)
-          EOF
+          '
