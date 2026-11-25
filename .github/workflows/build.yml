@@ -231,6 +231,10 @@ jobs:
             --set-str DEFAULT_NET_SCH "fq" \
             -e WQ_POWER_EFFICIENT_DEFAULT \
             -e NO_HZ_IDLE \
+            -e HZ_250 \
+            -d HZ_300 \
+            -e IKCONFIG \
+            -e IKCONFIG_PROC \
             -e CPU_IDLE \
             -e PM_WAKELOCKS_GC \
             -e JUMP_LABEL \
