@@ -1,4 +1,4 @@
-name: Build madaraRikudouLTS Blossom
+name: Build madaraRikudou Blossom
 
 on:
   workflow_dispatch:
@@ -33,9 +33,9 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang.git clang
 
-      - name: Clone Kernel Source (rikudouV1.5)
+      - name: Clone Kernel Source (madaraRikudou)
         run: |
-          git clone --depth=10 -b rikudouV1.5 https://github.com/zexxadev/niigo_kernel_xiaomi_blossom.git kernel
+          git clone --depth=10 -b madaraRikudou https://github.com/zexxadev/niigo_kernel_xiaomi_blossom.git kernel
 
       - name: Generate Auto-Changelog
         run: |
@@ -51,12 +51,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: ccache-blossom-${{ matrix.variant }}-${{ github.run_id }}
+          key: ccache-madaraRikudou-${{ matrix.variant }}-${{ github.run_id }}
           restore-keys: |
-            ccache-blossom-${{ matrix.variant }}-
+            ccache-madaraRikudou-${{ matrix.variant }}-
 
       - name: Setup Variant (${{ matrix.variant }})
         working-directory: kernel
+        env:
+          ZEXSU_SIZE: ${{ secrets.ZEXSU_SIZE }}
+          ZEXSU_HASH: ${{ secrets.ZEXSU_HASH }}
         run: |
           if [ "${{ matrix.variant }}" == "RSKSU-SusFS" ]; then
             KSU_REF="d5e9e025b8b49155f8014684d64c91742b465f65"
@@ -71,7 +74,7 @@ jobs:
             SUSFS_PATCH="$PWD/susfs419/patches/lge-sm8250-29902cf733dc/0002-susfs-v2.3.0-4.19.patch"
             [ -f "$SUSFS_PATCH" ] || { echo "ERROR: Patch SUSFS tidak ditemukan!"; exit 1; }
 
-            python3 -c '
+            python3 - "$SUSFS_PATCH" << 'PYEOF'
           import re, sys, subprocess
           with open(sys.argv[1], "r", encoding="utf-8", errors="replace") as f:
               patch_text = f.read()
@@ -98,7 +101,7 @@ jobs:
           res = subprocess.run(["patch", "-p1", "--no-backup-if-mismatch", "-F3"], input="\n".join(filtered_chunks), text=True)
           if res.returncode != 0:
               sys.exit("ERROR: Patch SUSFS gagal.")
-          ' "$SUSFS_PATCH"
+          PYEOF
 
             if find . -name "*.rej" -not -path "./susfs419/*" | grep -q .; then
               find . -name "*.rej" -not -path "./susfs419/*" -exec head -n 80 {} +
@@ -109,7 +112,7 @@ jobs:
               echo 'obj-$(CONFIG_KSU_SUSFS) += susfs.o' >> fs/Makefile
             fi
 
-            python3 -c '
+            python3 - << 'PYEOF'
           import os, re
           pkg_obs = "drivers/kernelsu/manager/pkg_observer.c"
           if os.path.exists(pkg_obs):
@@ -147,9 +150,9 @@ jobs:
                   code = code[:last_inc_end] + decl + code[last_inc_end:]
                   with open(target, "w") as f:
                       f.write(code)
-          '
+          PYEOF
 
-            cat << 'EOF' >> arch/arm64/configs/blossom_defconfig
+            cat << 'DEFEOF' >> arch/arm64/configs/blossom_defconfig
           CONFIG_OVERLAY_FS=y
           CONFIG_KSU=y
           # CONFIG_KSU_MANUAL_HOOK is not set
@@ -164,12 +167,12 @@ jobs:
           CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
           CONFIG_KSU_SUSFS_SUS_MAP=y
           # CONFIG_KPROBES is not set
-          EOF
+          DEFEOF
             sed -i 's/^[[:space:]]*//' arch/arm64/configs/blossom_defconfig
 
             sed -i 's/--dirty//g; s/-dirty//g' KernelSU/kernel/Kbuild KernelSU/kernel/Makefile drivers/kernelsu/Kbuild drivers/kernelsu/Makefile 2>/dev/null || true
-            if [ -n "${{ secrets.ZEXSU_SIZE }}" ] && [ -n "${{ secrets.ZEXSU_HASH }}" ]; then
-              python3 -c '
+            if [ -n "$ZEXSU_SIZE" ] && [ -n "$ZEXSU_HASH" ]; then
+              python3 - "$ZEXSU_SIZE" "$ZEXSU_HASH" << 'PYEOF'
           import glob, re, sys
           z_size, z_hash = sys.argv[1], sys.argv[2]
           for path in glob.glob("**/apk_sign.c", recursive=True):
@@ -179,20 +182,20 @@ jobs:
                   continue
               new_code, n = re.subn(
                   r"(return\s+check_v2_signature\s*\(\s*path\s*,\s*EXPECTED_SIZE\s*,\s*EXPECTED_HASH\s*\)\s*;)",
-                  f"if (check_v2_signature(path, {z_size}, \"{z_hash}\")) return true;\n\t\\1",
+                  f'if (check_v2_signature(path, {z_size}, "{z_hash}")) return true;\n\t\\1',
                   code
               )
               if not n:
                   new_code, n = re.subn(
                       r"(check_v2_signature\s*\(\s*path\s*,\s*EXPECTED_SIZE\s*,\s*EXPECTED_HASH\s*\))",
-                      f"(\\1 || check_v2_signature(path, {z_size}, \"{z_hash}\"))",
+                      f'(\\1 || check_v2_signature(path, {z_size}, "{z_hash}"))',
                       code
                   )
               if n:
                   with open(path, "w") as f:
                       f.write(new_code)
                   print(f"Patched Dual-Signature (BakaSU + ZexSU) in {path} OK")
-          ' "${{ secrets.ZEXSU_SIZE }}" "${{ secrets.ZEXSU_HASH }}"
+          PYEOF
             fi
           fi
 
@@ -247,8 +250,12 @@ jobs:
             -e KALLSYMS_ALL \
             -d DEBUG_PREEMPT \
             -d DEBUG_LIST \
-            --set-str LOCALVERSION "-madaraRikudouLTS" \
+            --set-str LOCALVERSION "-madaraRikudou" \
             -d LOCALVERSION_AUTO
+
+          if [ "${{ matrix.variant }}" == "Vanilla" ]; then
+            ./scripts/config --file out/.config -d KSU -d KSU_SUSFS
+          fi
 
           make -j$(nproc --all) O=out ARCH=arm64 olddefconfig
           {
@@ -271,6 +278,7 @@ jobs:
             LOCALVERSION="" \
             CC="ccache clang" \
             LD=ld.lld \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             AR=llvm-ar \
@@ -305,13 +313,13 @@ jobs:
 
           cd anykernel
 
-          cat << 'EOF' > anykernel.sh
+          cat << 'AKEOF' > anykernel.sh
           ### AnyKernel3 Ramdisk Mod Script
           ## osm0sis @ xda-developers
 
           ### AnyKernel setup
           properties() { '
-          kernel.string=madaraRikudouLTS 4.19.325 (${{ matrix.variant }}) by @zexxadev
+          kernel.string=madaraRikudou 4.19.325 (${{ matrix.variant }}) by @zexxadev
           do.devicecheck=1
           do.modules=0
           do.systemless=1
@@ -338,11 +346,11 @@ jobs:
           dump_boot;
           write_boot;
           ## end install
-          EOF
+          AKEOF
           sed -i 's/^[[:space:]]*//' anykernel.sh
 
           rm -rf .git README.md
-          ZIP_NAME="madaraRikudouLTS-blossom-${{ matrix.variant }}-$(date +%Y%m%d).zip"
+          ZIP_NAME="madaraRikudou-blossom-${{ matrix.variant }}-$(date +%Y%m%d).zip"
           zip -r9 "$GITHUB_WORKSPACE/$ZIP_NAME" .
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
@@ -354,8 +362,8 @@ jobs:
         with:
           repository: zexxadev/niigo_kernel_xiaomi_blossom
           token: ${{ secrets.RELEASE_TOKEN }}
-          tag_name: madaraRikudouLTS-b${{ github.run_number }}
-          name: madaraRikudouLTS Blossom (Build #${{ github.run_number }})
+          tag_name: madaraRikudou-b${{ github.run_number }}-${{ matrix.variant }}
+          name: madaraRikudou Blossom (${{ matrix.variant }} #${{ github.run_number }})
           body: |
             ### Changelogs
             ${{ env.CHANGELOG }}
@@ -372,7 +380,7 @@ jobs:
           CHANGELOG: ${{ env.CHANGELOG }}
           SLMK_STATUS: ${{ env.SLMK_STATUS }}
         run: |
-          python3 -c '
+          python3 - << 'PYEOF'
           import glob, hashlib, html, os, sys, urllib.request, uuid
 
           workspace = os.environ.get("GITHUB_WORKSPACE", ".")
@@ -386,10 +394,12 @@ jobs:
               file_data = f.read()
 
           md5_hash = hashlib.md5(file_data).hexdigest()
+          variant = os.environ["VARIANT"]
+          slmk = os.environ.get("SLMK_STATUS", "UNKNOWN")
           clog = html.escape(os.environ.get("CHANGELOG", "• Maintenance build"))
           caption = (
-              f"<b>madaraRikudouLTS ({os.environ[\"VARIANT\"]})</b>\n"
-              f"Simple LMK: <code>{os.environ.get(\"SLMK_STATUS\", \"UNKNOWN\")}</code>\n"
+              f"<b>madaraRikudou ({variant})</b>\n"
+              f"Simple LMK: <code>{slmk}</code>\n"
               f"MD5: <code>{md5_hash}</code>\n\n"
               f"<b>Changelog:</b>\n{clog}"
           )
@@ -398,19 +408,20 @@ jobs:
           body = bytearray()
           for key, val in {"chat_id": os.environ["TG_CHAT_ID"], "caption": caption, "parse_mode": "HTML"}.items():
               body.extend(f"--{boundary}\r\n".encode())
-              body.extend(f"Content-Disposition: form-data; name=\"{key}\"\r\n\r\n{val}\r\n".encode())
+              body.extend(f'Content-Disposition: form-data; name="{key}"\r\n\r\n{val}\r\n'.encode())
 
           body.extend(f"--{boundary}\r\n".encode())
           body.extend(
-              f"Content-Disposition: form-data; name=\"document\"; filename=\"{os.path.basename(file_path)}\"\r\n"
+              f'Content-Disposition: form-data; name="document"; filename="{os.path.basename(file_path)}"\r\n'
               f"Content-Type: application/zip\r\n\r\n".encode()
           )
           body.extend(file_data)
           body.extend(f"\r\n--{boundary}--\r\n".encode())
 
-          url = f"https://api.telegram.org/bot{os.environ[\"TG_BOT_TOKEN\"]}/sendDocument"
+          token = os.environ["TG_BOT_TOKEN"]
+          url = f"https://api.telegram.org/bot{token}/sendDocument"
           req = urllib.request.Request(url, data=bytes(body))
           req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
           with urllib.request.urlopen(req, timeout=120) as resp:
               print("Telegram upload sukses:", resp.status)
-          '
+          PYEOF
