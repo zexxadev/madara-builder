@@ -241,8 +241,8 @@ jobs:
             -e UCLAMP_TASK \
             -e UCLAMP_TASK_GROUP \
             -e ANDROID_SIMPLE_LMK \
-            --set-val ANDROID_SIMPLE_LMK_MINFREE 12 \
-            --set-val ANDROID_SIMPLE_LMK_TIMEOUT_MSEC 1000 \
+            --set-val ANDROID_SIMPLE_LMK_MINFREE 96 \
+            --set-val ANDROID_SIMPLE_LMK_TIMEOUT_MSEC 250 \
             -d ANDROID_LOW_MEMORY_KILLER \
             -e LRU_GEN \
             -e LRU_GEN_ENABLED \
