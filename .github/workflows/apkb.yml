@@ -45,6 +45,8 @@ jobs:
           repository: Baka-SU/BakaSU
           ref: ${{ inputs.ref }}
           submodules: recursive
+          fetch-depth: 0
+          fetch-depth: 0
           clean: true
 
       - name: Apply Material Glass UI & Archive Name
@@ -72,7 +74,7 @@ jobs:
 
       - name: Detect NDK Version from libs.versions.toml
         run: |
-          NDK_VER=$(grep -E '^ndk\s*=' manager/gradle/libs.versions.toml | head -n 1 | sed -E 's/.*["''']([^"''']+)["'''].*/\1/')
+          NDK_VER=$(grep -E '^ndk[[:space:]]*=' manager/gradle/libs.versions.toml | head -n 1 | cut -d'"' -f2)
           if [ -z "$NDK_VER" ]; then
             NDK_VER="27.2.12479018"
           fi
@@ -104,6 +106,8 @@ jobs:
             echo "NDK $NDK_VERSION sudah tersedia dari cache."
           fi
           echo "ANDROID_NDK_ROOT=$NDK_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
 
       - name: Setup Rust nightly toolchain for Android arm64
         uses: dtolnay/rust-toolchain@nightly
@@ -124,14 +128,15 @@ jobs:
           restore-keys: |
             cargo-nightly-arm64-${{ runner.os }}-
 
+      - name: Setup cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Setup cargo-ndk
+        run: cargo install cargo-ndk --locked
+
       - name: Build libksud.so for arm64-v8a
         run: |
-          NDK_BIN="$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          export PATH="$NDK_BIN:$PATH"
-          export CC_aarch64_linux_android="$NDK_BIN/aarch64-linux-android26-clang"
-          export CXX_aarch64_linux_android="$NDK_BIN/aarch64-linux-android26-clang++"
-          export AR_aarch64_linux_android="$NDK_BIN/llvm-ar"
-          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CC_aarch64_linux_android"
+          export KSU_PACKAGE_NAME="org.zexsu.manager"
 
           if [ -f "userspace/ksud/Cargo.toml" ]; then
             KSUD_DIR="userspace/ksud"
@@ -141,13 +146,13 @@ jobs:
             KSUD_DIR=$(find . -maxdepth 3 -name "Cargo.toml" -exec grep -l "ksud" {} + | head -n 1 | xargs dirname)
           fi
 
-          echo "Building ksud in: $KSUD_DIR"
-          cargo build --manifest-path "$KSUD_DIR/Cargo.toml" --target aarch64-linux-android --release
+          echo "Building ksud in: $KSUD_DIR (KSU_PACKAGE_NAME=$KSU_PACKAGE_NAME)"
+          (cd "$KSUD_DIR" && cargo ndk b -P 26 -t aarch64-linux-android -r -Z build-std-features="optimize_for_size" -Z trim-paths)
 
           JNI_DIR="manager/app/src/main/jniLibs/arm64-v8a"
           mkdir -p "$JNI_DIR"
           cp "$KSUD_DIR/target/aarch64-linux-android/release/ksud" "$JNI_DIR/libksud.so"
-          "$NDK_BIN/llvm-strip" --strip-unneeded "$JNI_DIR/libksud.so"
+          "$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded "$JNI_DIR/libksud.so"
           ls -lh "$JNI_DIR/libksud.so"
 
       - name: Build & Zipalign APK (arm64-v8a)
@@ -220,13 +225,14 @@ jobs:
           SIGN_STATUS: ${{ steps.sign_apk.outputs.sign_status }}
           REF_NAME: ${{ inputs.ref }}
           BUILD_TYPE: ${{ inputs.build_type }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
-          CAPTION=$(printf "🛡️ <b>ZexSU Manager</b> (<code>org.zexsu.manager</code>)
-• <b>UI:</b> Material Glass
-• <b>Ref:</b> <code>%s</code> (%s)
-• <b>Status:</b> %s
-• <b>Run:</b> #%s" "${REF_NAME}" "${BUILD_TYPE}" "${SIGN_STATUS}" "${{ github.run_number }}")
-          RESP=$(curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument"             -F "chat_id=${TG_CHAT_ID}"             -F "document=@${FINAL_APK}"             -F "caption=${CAPTION}"             -F "parse_mode=HTML")
+          CAPTION=$(printf '🛡️ <b>ZexSU Manager</b> (<code>org.zexsu.manager</code>)\n• <b>UI:</b> Material Glass\n• <b>Ref:</b> <code>%s</code> (%s)\n• <b>Status:</b> %s\n• <b>Run:</b> #%s' "$REF_NAME" "$BUILD_TYPE" "$SIGN_STATUS" "$RUN_NUMBER")
+          RESP=$(curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendDocument" \
+            --form-string "chat_id=${TG_CHAT_ID}" \
+            -F "document=@${FINAL_APK}" \
+            --form-string "caption=${CAPTION}" \
+            --form-string "parse_mode=HTML")
 
           echo "$RESP"
           echo "$RESP" | grep -q '"ok":true'
