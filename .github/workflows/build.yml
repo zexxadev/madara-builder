@@ -155,6 +155,7 @@ jobs:
             cat << 'DEFEOF' >> arch/arm64/configs/blossom_defconfig
           CONFIG_OVERLAY_FS=y
           CONFIG_KSU=y
+          CONFIG_KSU_MULTI_MANAGER_SUPPORT=y
           # CONFIG_KSU_MANUAL_HOOK is not set
           # CONFIG_KSU_TRACEPOINT_HOOK is not set
           CONFIG_KSU_SUSFS=y
@@ -174,29 +175,28 @@ jobs:
             if [ -n "$ZEXSU_SIZE" ] && [ -n "$ZEXSU_HASH" ]; then
               python3 - "$ZEXSU_SIZE" "$ZEXSU_HASH" << 'PYEOF'
           import glob, re, sys
-          z_size, z_hash = sys.argv[1], sys.argv[2]
-          for path in glob.glob("**/apk_sign.c", recursive=True):
-              with open(path, "r", errors="ignore") as f:
+          z_size = sys.argv[1].strip()
+          z_hash = sys.argv[2].strip().lower()
+          patched = 0
+          for p in glob.glob("**/apk_sign.c", recursive=True):
+              with open(p, "r", errors="ignore") as f:
                   code = f.read()
               if z_hash in code:
+                  patched += 1
                   continue
-              repl_ret = 'if (check_v2_signature(path, ' + z_size + ', "' + z_hash + '")) return true;\n\t\\1'
               new_code, n = re.subn(
-                  r"(return\s+check_v2_signature\s*\(\s*path\s*,\s*EXPECTED_SIZE\s*,\s*EXPECTED_HASH\s*\)\s*;)",
-                  repl_ret,
-                  code
+                  r'({\s*EXPECTED_SIZE_BAKASU\s*,\s*EXPECTED_HASH_BAKASU\s*}\s*,)',
+                  lambda m: m.group(1) + '\n    { ' + z_size + ', "' + z_hash + '" }, /* ZexSU Manager */',
+                  code,
+                  count=1
               )
-              if not n:
-                  repl_expr = '(\\1 || check_v2_signature(path, ' + z_size + ', "' + z_hash + '"))'
-                  new_code, n = re.subn(
-                      r"(check_v2_signature\s*\(\s*path\s*,\s*EXPECTED_SIZE\s*,\s*EXPECTED_HASH\s*\))",
-                      repl_expr,
-                      code
-                  )
               if n:
-                  with open(path, "w") as f:
+                  with open(p, "w") as f:
                       f.write(new_code)
-                  print(f"Patched Dual-Signature (BakaSU + ZexSU) in {path} OK")
+                  patched += 1
+                  print(f"Patched ZexSU key into apk_sign_keys[] in {p} OK")
+          if patched == 0:
+              sys.exit("ERROR: Gagal menyuntikkan ZEXSU signature ke apk_sign.c!")
           PYEOF
             fi
           fi
